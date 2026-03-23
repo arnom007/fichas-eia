@@ -77,6 +77,21 @@ export default function App() {
   });
 
   useEffect(() => {
+    // Força a limpeza dos estilos padrão do Vite que "espremem" a tela
+    document.body.style.display = 'block';
+    document.body.style.margin = '0';
+    document.documentElement.style.backgroundColor = '#f8fafc'; // Garante o fundo claro (slate-50)
+    
+    const rootNode = document.getElementById('root');
+    if (rootNode) {
+      rootNode.style.width = '100%';
+      rootNode.style.minHeight = '100vh';
+      rootNode.style.maxWidth = 'none'; // Quebra o limite de 1280px do App.css do Vite
+      rootNode.style.padding = '0';
+      rootNode.style.margin = '0';
+      rootNode.style.textAlign = 'left';
+    }
+
     // Injeta a biblioteca de leitura de PDF do lado do cliente
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
@@ -499,7 +514,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
+    <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
       
       {/* POP-UP (MODAL) DE ENVIO PROFISSIONAL */}
       {showModal && (
