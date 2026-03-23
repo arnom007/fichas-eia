@@ -216,10 +216,6 @@ export default function App() {
         comentario: ''
       });
     }
-
-    // --- NOVA EXTRAÇÃO DE ITENS AFETIVOS ---
-    // Esta secção foi reescrita para resolver o problema da Ficha PS-01
-    // onde "Mentalidade de Segurança" foi lida como "NORMAL" em vez de "PRECISA MELHORAR".
     
     let affectiveAreaText = text;
     const afetivosStart = text.search(/Itens Afetivos/i);
@@ -229,11 +225,8 @@ export default function App() {
       affectiveAreaText = text.substring(afetivosStart, comentariosStart !== -1 ? comentariosStart : text.length);
     }
 
-    // Limpa as quebras de linha e aspas maliciosas, substituindo por espaços
     const cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    // Expressão Regular melhorada: Procura o Nome do Item (até 50 caracteres) seguido de um dos Graus permitidos.
-    // Ignora hífens soltos ou texto no início da string usando (?:^|\s)
     const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\b/gi;
     let matchT2;
     
@@ -241,14 +234,7 @@ export default function App() {
       let itemName = matchT2[1].trim();
       let itemGrau = matchT2[2].toUpperCase();
 
-      // Filtros de segurança:
-      // 1. O nome deve ter mais de 3 letras.
-      // 2. Não pode começar por um número (para não confundir com os itens da tabela 1).
-      // 3. Não pode ser um cabeçalho genérico como "Itens Afetivos" ou "Cognitivos".
       if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
-        
-        // Remove possíveis lixos (como o próprio grau) do nome do item caso a regex apanhe algo a mais
-        // (Isso impede que "Aplicação de NPA PRECISA MELHORAR" vire o nome do item)
         itemName = itemName.replace(new RegExp(`\\b${itemGrau}\\b`, 'i'), '').trim();
 
         if(itemName){
@@ -258,13 +244,12 @@ export default function App() {
             numero: '',
             nome: itemName,
             fase: '--',
-            grau: itemGrau, // Grau correto extraído!
+            grau: itemGrau, 
             comentario: ''
           });
         }
       }
     }
-    // ----------------------------------------
 
     let finalItems = Array.from(extractedItemsMap.values());
 
@@ -275,12 +260,15 @@ export default function App() {
       .replace(/\b\d+\s+de\s+\d+\b/gi, '')
       .replace(/Comentários:/gi, '');
 
-    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|--|)\s*\/\s*([A-Za-z0-9\-]+)\s*\)\s*:?/gi;
-    const commentMatches = [];
-    let matchC;
+    // === INÍCIO DA CORREÇÃO DO LOOP INFINITO ===
+    // Agora agrupamos TODOS os cabeçalhos de comentários numa única lista primeiro
+    const allCommentMatches: any[] = [];
 
+    // 1. Extrai os comentários das manobras normais (com RC, RM, RO)
+    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|--|)\s*\/\s*([A-Za-z0-9À-ÿ\- ]+)\s*\)\s*:?/gi;
+    let matchC;
     while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
-      commentMatches.push({
+      allCommentMatches.push({
         index: matchC.index,
         length: matchC[0].length,
         numero: matchC[1].trim(),
@@ -290,14 +278,33 @@ export default function App() {
       });
     }
 
-    for (let i = 0; i < commentMatches.length; i++) {
-      const currentMatch = commentMatches[i];
+    // 2. Extrai os comentários afetivos/cognitivos (sem fase)
+    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\s*\)\s*:?/gi;
+    let matchAC;
+    while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
+      allCommentMatches.push({
+        index: matchAC.index,
+        length: matchAC[0].length,
+        numero: matchAC[1].trim(),
+        nome: matchAC[2].replace(/\n/g, ' ').trim(),
+        fase: '--',
+        grau: matchAC[3].trim()
+      });
+    }
+
+    // 3. Ordena os comentários cronologicamente conforme aparecem no texto
+    allCommentMatches.sort((a, b) => a.index - b.index);
+
+    // 4. Processa os recortes de texto com base na ordem unificada (Sem risco de loops!)
+    for (let i = 0; i < allCommentMatches.length; i++) {
+      const currentMatch = allCommentMatches[i];
       const startIndex = currentMatch.index + currentMatch.length;
       let endIndex;
 
-      if (i + 1 < commentMatches.length) {
-        endIndex = commentMatches[i + 1].index;
+      if (i + 1 < allCommentMatches.length) {
+        endIndex = allCommentMatches[i + 1].index;
       } else {
+        // Se for o último comentário, procura os termos finais do PDF
         const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
         const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
         
@@ -317,10 +324,11 @@ export default function App() {
         .replace(/\s{2,}/g, ' ')
         .trim();
 
-      let foundItem = finalItems.find(item => item.numero === currentMatch.numero);
+      // Relaciona o comentário ao item já extraído
+      let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
 
       if (!foundItem) {
-        foundItem = finalItems.find(item => {
+        foundItem = finalItems.find((item: any) => {
           const n1 = item.nome.toLowerCase().trim();
           const n2 = currentMatch.nome.toLowerCase().trim();
           return n1.includes(n2) || n2.includes(n1);
@@ -331,6 +339,7 @@ export default function App() {
         foundItem.comentario = comentarioText;
         if (!foundItem.numero) foundItem.numero = currentMatch.numero;
       } else {
+        // Se o item não existia na tabela, cria-o a partir do comentário
         finalItems.push({
           id: crypto.randomUUID(),
           numero: currentMatch.numero,
@@ -341,70 +350,7 @@ export default function App() {
         });
       }
     }
-
-    // Procura comentários afetivos que não começam por números e liga-os aos itens já extraídos
-    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\s*\)\s*:?/gi;
-    let matchAC;
-    while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
-      const matchIndex = matchAC.index;
-      const matchLen = matchAC[0].length;
-      const matchNum = matchAC[1].trim();
-      const matchNome = matchAC[2].trim();
-      const matchGrau = matchAC[3].trim();
-      
-      const startIndex = matchIndex + matchLen;
-      let endIndex = cleanComments.length;
-
-      // Procura o próximo comentário normal ou o final do texto
-      const nextItemMatch = commentHeaderRegex.exec(cleanComments.substring(startIndex));
-      const nextAffectiveMatch = affectiveCommentRegex.exec(cleanComments.substring(startIndex));
-      
-      let nextIndex = -1;
-      if(nextItemMatch && nextAffectiveMatch) {
-         nextIndex = Math.min(nextItemMatch.index, nextAffectiveMatch.index);
-      } else if (nextItemMatch) {
-         nextIndex = nextItemMatch.index;
-      } else if (nextAffectiveMatch) {
-         nextIndex = nextAffectiveMatch.index;
-      }
-
-      if (nextIndex !== -1) {
-        endIndex = startIndex + nextIndex;
-      } else {
-        const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
-        const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
-        if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) {
-          endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
-        } else if (assDigitalIndex !== -1) {
-          endIndex = assDigitalIndex;
-        } else if (recomendacoesIndex !== -1) {
-          endIndex = recomendacoesIndex;
-        }
-      }
-
-      const comentarioText = cleanComments.substring(startIndex, endIndex).replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
-
-      let foundItem = finalItems.find(item => {
-        const n1 = item.nome.toLowerCase().trim();
-        const n2 = matchNome.toLowerCase().trim();
-        return n1.includes(n2) || n2.includes(n1);
-      });
-
-      if (foundItem) {
-        foundItem.comentario = comentarioText;
-        if (!foundItem.numero) foundItem.numero = matchNum;
-      } else {
-        finalItems.push({
-          id: crypto.randomUUID(),
-          numero: matchNum,
-          nome: matchNome,
-          fase: '--',
-          grau: matchGrau,
-          comentario: comentarioText
-        });
-      }
-    }
-
+    // === FIM DA CORREÇÃO DO LOOP INFINITO ===
 
     finalItems.sort((a: any, b: any) => {
       const numA = parseInt(a.numero);
