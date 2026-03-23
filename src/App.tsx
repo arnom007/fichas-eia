@@ -217,32 +217,54 @@ export default function App() {
       });
     }
 
-    const fullCleanText = text.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
-    let affectiveAreaText = fullCleanText;
-    const afetivosStart = fullCleanText.search(/Itens Afetivos/i);
-    const comentariosStart = fullCleanText.search(/Comentários:/i);
+    // --- NOVA EXTRAÇÃO DE ITENS AFETIVOS ---
+    // Esta secção foi reescrita para resolver o problema da Ficha PS-01
+    // onde "Mentalidade de Segurança" foi lida como "NORMAL" em vez de "PRECISA MELHORAR".
+    
+    let affectiveAreaText = text;
+    const afetivosStart = text.search(/Itens Afetivos/i);
+    const comentariosStart = text.search(/Comentários:/i);
     
     if (afetivosStart !== -1) {
-      affectiveAreaText = fullCleanText.substring(afetivosStart, comentariosStart !== -1 ? comentariosStart : fullCleanText.length);
+      affectiveAreaText = text.substring(afetivosStart, comentariosStart !== -1 ? comentariosStart : text.length);
     }
 
-    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|ABAIXO DO PADRÃO|N\/O|--)\b/gi;
+    // Limpa as quebras de linha e aspas maliciosas, substituindo por espaços
+    const cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
+
+    // Expressão Regular melhorada: Procura o Nome do Item (até 50 caracteres) seguido de um dos Graus permitidos.
+    // Ignora hífens soltos ou texto no início da string usando (?:^|\s)
+    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\b/gi;
     let matchT2;
     
-    while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
+    while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
       let itemName = matchT2[1].trim();
-      if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos')) {
-        const id = crypto.randomUUID();
-        extractedItemsMap.set(id, {
-          id: id,
-          numero: '',
-          nome: itemName,
-          fase: '--',
-          grau: matchT2[2].toUpperCase(),
-          comentario: ''
-        });
+      let itemGrau = matchT2[2].toUpperCase();
+
+      // Filtros de segurança:
+      // 1. O nome deve ter mais de 3 letras.
+      // 2. Não pode começar por um número (para não confundir com os itens da tabela 1).
+      // 3. Não pode ser um cabeçalho genérico como "Itens Afetivos" ou "Cognitivos".
+      if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
+        
+        // Remove possíveis lixos (como o próprio grau) do nome do item caso a regex apanhe algo a mais
+        // (Isso impede que "Aplicação de NPA PRECISA MELHORAR" vire o nome do item)
+        itemName = itemName.replace(new RegExp(`\\b${itemGrau}\\b`, 'i'), '').trim();
+
+        if(itemName){
+          const id = crypto.randomUUID();
+          extractedItemsMap.set(id, {
+            id: id,
+            numero: '',
+            nome: itemName,
+            fase: '--',
+            grau: itemGrau, // Grau correto extraído!
+            comentario: ''
+          });
+        }
       }
     }
+    // ----------------------------------------
 
     let finalItems = Array.from(extractedItemsMap.values());
 
@@ -319,6 +341,70 @@ export default function App() {
         });
       }
     }
+
+    // Procura comentários afetivos que não começam por números e liga-os aos itens já extraídos
+    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\s*\)\s*:?/gi;
+    let matchAC;
+    while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
+      const matchIndex = matchAC.index;
+      const matchLen = matchAC[0].length;
+      const matchNum = matchAC[1].trim();
+      const matchNome = matchAC[2].trim();
+      const matchGrau = matchAC[3].trim();
+      
+      const startIndex = matchIndex + matchLen;
+      let endIndex = cleanComments.length;
+
+      // Procura o próximo comentário normal ou o final do texto
+      const nextItemMatch = commentHeaderRegex.exec(cleanComments.substring(startIndex));
+      const nextAffectiveMatch = affectiveCommentRegex.exec(cleanComments.substring(startIndex));
+      
+      let nextIndex = -1;
+      if(nextItemMatch && nextAffectiveMatch) {
+         nextIndex = Math.min(nextItemMatch.index, nextAffectiveMatch.index);
+      } else if (nextItemMatch) {
+         nextIndex = nextItemMatch.index;
+      } else if (nextAffectiveMatch) {
+         nextIndex = nextAffectiveMatch.index;
+      }
+
+      if (nextIndex !== -1) {
+        endIndex = startIndex + nextIndex;
+      } else {
+        const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
+        const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
+        if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) {
+          endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
+        } else if (assDigitalIndex !== -1) {
+          endIndex = assDigitalIndex;
+        } else if (recomendacoesIndex !== -1) {
+          endIndex = recomendacoesIndex;
+        }
+      }
+
+      const comentarioText = cleanComments.substring(startIndex, endIndex).replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+      let foundItem = finalItems.find(item => {
+        const n1 = item.nome.toLowerCase().trim();
+        const n2 = matchNome.toLowerCase().trim();
+        return n1.includes(n2) || n2.includes(n1);
+      });
+
+      if (foundItem) {
+        foundItem.comentario = comentarioText;
+        if (!foundItem.numero) foundItem.numero = matchNum;
+      } else {
+        finalItems.push({
+          id: crypto.randomUUID(),
+          numero: matchNum,
+          nome: matchNome,
+          fase: '--',
+          grau: matchGrau,
+          comentario: comentarioText
+        });
+      }
+    }
+
 
     finalItems.sort((a: any, b: any) => {
       const numA = parseInt(a.numero);
