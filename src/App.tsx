@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle } from 'lucide-react';
 
-const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full" }) => (
+// Diz ao TypeScript que a biblioteca pdfjsLib existe globalmente na janela do navegador
+declare global {
+  interface Window {
+    pdfjsLib: any;
+  }
+}
+
+const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <input 
@@ -15,7 +22,7 @@ const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass 
   </div>
 );
 
-const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }) => (
+const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <select 
@@ -24,12 +31,12 @@ const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }) 
       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none"
     >
       <option value="" disabled>Selecione...</option>
-      {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+      {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
     </select>
   </div>
 );
 
-const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-full" }) => (
+const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <textarea 
@@ -43,7 +50,7 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 
 export default function App() {
   const [status, setStatus] = useState('idle'); 
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   
   // Estado do Modal de Envio
@@ -79,7 +86,7 @@ export default function App() {
     document.body.appendChild(script);
   }, []);
 
-  const updateMeta = (field, value) => {
+  const updateMeta = (field: string, value: string) => {
     // Força trigramas a terem no máximo 3 letras em maiúsculo
     if (field === 'aluno1p' || field === 'instrutor') {
       value = value.toUpperCase().slice(0, 3);
@@ -87,7 +94,7 @@ export default function App() {
     setMeta(prev => ({ ...prev, [field]: value }));
   };
 
-  const processTextData = (text) => {
+  const processTextData = (text: string) => {
     const headerEndIdx = text.search(/1\s*-|Itens Afetivos|Comentários:/i);
     const headerText = headerEndIdx !== -1 ? text.substring(0, headerEndIdx) : text;
     const cleanHeader = headerText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
@@ -101,7 +108,7 @@ export default function App() {
     const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
     const data = matchData ? matchData[1] : '';
 
-    const times = [...cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g)];
+    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
     let hdep = '';
     let tev = '';
     if (times.length >= 2) {
@@ -146,7 +153,6 @@ export default function App() {
         .trim();
     }
 
-    // Mantém quem estava logado enviando, mas atualiza os dados do voo
     setMeta(prev => ({
       esquadrilha: prev.esquadrilha, 
       aluno1p: prev.aluno1p,         
@@ -299,7 +305,7 @@ export default function App() {
       }
     }
 
-    finalItems.sort((a, b) => {
+    finalItems.sort((a: any, b: any) => {
       const numA = parseInt(a.numero);
       const numB = parseInt(b.numero);
       if (isNaN(numA) && isNaN(numB)) return 0;
@@ -318,11 +324,11 @@ export default function App() {
     }
   };
 
-  const handleFileUpload = async (e) => {
+  const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return;
 
-    e.target.value = null; // Reseta o input de arquivo
+    e.target.value = ''; // Reseta o input de arquivo (sem dar erro no React/TS)
     setStatus('loading');
     setErrorMsg('');
 
@@ -343,7 +349,7 @@ export default function App() {
           const textContent = await page.getTextContent();
           
           const items = textContent.items;
-          items.sort((a, b) => {
+          items.sort((a: any, b: any) => {
             if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
               return b.transform[5] - a.transform[5];
             }
@@ -376,12 +382,12 @@ export default function App() {
     }
   };
 
-  const updateItem = (id, field, value) => {
-    setItems(items.map(item => item.id === id ? { ...item, [field]: value } : item));
+  const updateItem = (id: string, field: string, value: string) => {
+    setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   };
 
-  const removeItem = (id) => {
-    setItems(items.filter(item => item.id !== id));
+  const removeItem = (id: string) => {
+    setItems(items.filter((item: any) => item.id !== id));
   };
 
   const addNewItem = () => {
@@ -585,7 +591,7 @@ export default function App() {
               <label className="bg-blue-600 hover:bg-blue-700 transition text-white px-8 py-4 rounded-xl font-medium cursor-pointer shadow-sm text-lg flex items-center gap-3">
                 <FileText size={24} />
                 Selecionar PDF
-                <input type="file" accept="application/pdf" className="hidden" onClick={(e) => { e.target.value = null }} onChange={handleFileUpload} />
+                <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => { e.target.value = '' }} onChange={handleFileUpload} />
               </label>
             </div>
           </div>
@@ -615,26 +621,26 @@ export default function App() {
                 <MetaSelect 
                   label="Esquadrilha *" 
                   value={meta.esquadrilha} 
-                  onChange={e => updateMeta('esquadrilha', e.target.value)} 
+                  onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} 
                   options={['Antares', 'Vega', 'Castor', 'Sirius']} 
                 />
-                <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={e => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
-                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={e => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="HNI" />
-                <MetaInput label="Missão" value={meta.missao} onChange={e => updateMeta('missao', e.target.value)} />
-                <MetaInput label="Grau da Missão" value={meta.grauMissao} onChange={e => updateMeta('grauMissao', e.target.value)} />
-                <MetaInput label="Data" value={meta.data} onChange={e => updateMeta('data', e.target.value)} />
-                <MetaInput label="Fase" value={meta.fase} onChange={e => updateMeta('fase', e.target.value)} />
-                <MetaInput label="Aeronave" value={meta.aeronave} onChange={e => updateMeta('aeronave', e.target.value)} />
-                <MetaInput label="H. Dep" value={meta.hdep} onChange={e => updateMeta('hdep', e.target.value)} />
-                <MetaInput label="Pousos" value={meta.pousos} onChange={e => updateMeta('pousos', e.target.value)} />
-                <MetaInput label="TEV" value={meta.tev} onChange={e => updateMeta('tev', e.target.value)} />
+                <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
+                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="HNI" />
+                <MetaInput label="Missão" value={meta.missao} onChange={(e: any) => updateMeta('missao', e.target.value)} />
+                <MetaInput label="Grau da Missão" value={meta.grauMissao} onChange={(e: any) => updateMeta('grauMissao', e.target.value)} />
+                <MetaInput label="Data" value={meta.data} onChange={(e: any) => updateMeta('data', e.target.value)} />
+                <MetaInput label="Fase" value={meta.fase} onChange={(e: any) => updateMeta('fase', e.target.value)} />
+                <MetaInput label="Aeronave" value={meta.aeronave} onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
+                <MetaInput label="H. Dep" value={meta.hdep} onChange={(e: any) => updateMeta('hdep', e.target.value)} />
+                <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
+                <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
 
               <div className="mt-4 pt-4 border-t border-slate-100">
                 <MetaTextarea 
                   label="Parecer do Comandante / Recomendações" 
                   value={meta.parecer} 
-                  onChange={e => updateMeta('parecer', e.target.value)} 
+                  onChange={(e: any) => updateMeta('parecer', e.target.value)} 
                   placeholder="Se houver recomendações no fim da ficha, aparecerão aqui..." 
                 />
               </div>
