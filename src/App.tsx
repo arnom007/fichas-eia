@@ -16,7 +16,7 @@ const getGradeColorClass = (grau: string) => {
   if (g === '4' || g === 'NORMAL') return 'text-green-600 font-bold';
   if (g === '5' || g === 'DESTACOU-SE') return 'text-blue-500 font-bold';
   if (g === '6') return 'text-blue-800 font-bold';
-  return 'text-slate-900 font-medium'; // Padrão
+  return 'text-slate-900 font-medium'; // Padrão e Vazio
 };
 
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full" }: any) => (
@@ -214,17 +214,27 @@ export default function App() {
     const cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
     const extractedItemsMap = new Map();
 
-    // REGEX ATUALIZADO: Agora suporta 'PR' e torna o grau opcional caso seja um item apenas praticado sem nota.
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(RC|RM|RO|PR|--)(?:\s+([0-9]|N\/O|--))?(?=\s|$|\b)/gi;
+    // REGEX BLINDADO: Separa obrigatoriamente quem é PR (sem nota) e quem é avaliado (com nota)
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|--))/gi;
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
+      // Se matchT1[3] existir, significa que caiu na regra do "PR" e não vai puxar número nenhum
+      const isPR = !!matchT1[3];
+      const rawFase = isPR ? 'PR' : matchT1[4];
+      let rawGrau = isPR ? '' : matchT1[5];
+
+      // Proteção de Dados (Looker Studio): Se for traço ou N/O, converte para vazio puro
+      if (rawGrau === '--' || rawGrau === 'N/O') {
+        rawGrau = '';
+      }
+
       const id = crypto.randomUUID();
       extractedItemsMap.set(id, {
         id: id,
         numero: matchT1[1].trim(),
         nome: matchT1[2].trim(),
-        fase: matchT1[3].trim().toUpperCase(),
-        grau: matchT1[4] ? matchT1[4].trim().toUpperCase() : '--', // Proteção para itens PR sem nota
+        fase: rawFase.trim().toUpperCase(),
+        grau: rawGrau.trim().toUpperCase(),
         comentario: ''
       });
     }
@@ -246,8 +256,15 @@ export default function App() {
       let itemName = matchT2[1].trim();
       let itemGrau = matchT2[2].toUpperCase();
 
+      // Proteção de Dados para os Itens Afetivos
+      if (itemGrau === '--' || itemGrau === 'N/O' || itemGrau === 'NÃO OBSERVADO') {
+        itemGrau = '';
+      }
+
       if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
-        itemName = itemName.replace(new RegExp(`\\b${itemGrau}\\b`, 'i'), '').trim();
+        // Limpa possíveis vestígios do grau dentro do nome
+        const grauTextToRemove = matchT2[2].toUpperCase();
+        itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
 
         if(itemName){
           const id = crypto.randomUUID();
@@ -272,42 +289,51 @@ export default function App() {
       .replace(/\b\d+\s+de\s+\d+\b/gi, '')
       .replace(/Comentários:/gi, '');
 
-    // === INÍCIO DA CORREÇÃO DO LOOP INFINITO ===
-    // Agora agrupamos TODOS os cabeçalhos de comentários numa única lista primeiro
     const allCommentMatches: any[] = [];
 
-    // 1. Extrai os comentários das manobras normais (com RC, RM, RO, PR)
+    // Comentários Manobras
     const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|PR|--|)\s*\/\s*([A-Za-z0-9À-ÿ\- ]+)\s*\)\s*:?/gi;
     let matchC;
     while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
+      let rawFaseC = matchC[3].trim();
+      let rawGrauC = matchC[4].trim();
+
+      // Proteção de Dados: Se no comentário a fase for PR ou o grau for nulo, forçamos o vazio
+      if (rawFaseC === 'PR' || rawGrauC === '--' || rawGrauC === 'N/O' || rawGrauC === 'NÃO OBSERVADO') {
+        rawGrauC = '';
+      }
+
       allCommentMatches.push({
         index: matchC.index,
         length: matchC[0].length,
         numero: matchC[1].trim(),
         nome: matchC[2].replace(/\n/g, ' ').trim(),
-        fase: matchC[3].trim(),
-        grau: matchC[4].trim()
+        fase: rawFaseC,
+        grau: rawGrauC
       });
     }
 
-    // 2. Extrai os comentários afetivos/cognitivos (sem fase)
+    // Comentários Afetivos
     const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|--)\s*\)\s*:?/gi;
     let matchAC;
     while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
+      let rawGrauAC = matchAC[3].trim();
+      if (rawGrauAC === '--' || rawGrauAC === 'N/O' || rawGrauAC === 'NÃO OBSERVADO') {
+        rawGrauAC = '';
+      }
+
       allCommentMatches.push({
         index: matchAC.index,
         length: matchAC[0].length,
         numero: matchAC[1].trim(),
         nome: matchAC[2].replace(/\n/g, ' ').trim(),
         fase: '--',
-        grau: matchAC[3].trim()
+        grau: rawGrauAC
       });
     }
 
-    // 3. Ordena os comentários cronologicamente conforme aparecem no texto
     allCommentMatches.sort((a, b) => a.index - b.index);
 
-    // 4. Processa os recortes de texto com base na ordem unificada (Sem risco de loops!)
     for (let i = 0; i < allCommentMatches.length; i++) {
       const currentMatch = allCommentMatches[i];
       const startIndex = currentMatch.index + currentMatch.length;
@@ -316,7 +342,6 @@ export default function App() {
       if (i + 1 < allCommentMatches.length) {
         endIndex = allCommentMatches[i + 1].index;
       } else {
-        // Se for o último comentário, procura os termos finais do PDF
         const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
         const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
         
@@ -336,7 +361,6 @@ export default function App() {
         .replace(/\s{2,}/g, ' ')
         .trim();
 
-      // Relaciona o comentário ao item já extraído
       let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
 
       if (!foundItem) {
@@ -351,7 +375,6 @@ export default function App() {
         foundItem.comentario = comentarioText;
         if (!foundItem.numero) foundItem.numero = currentMatch.numero;
       } else {
-        // Se o item não existia na tabela, cria-o a partir do comentário
         finalItems.push({
           id: crypto.randomUUID(),
           numero: currentMatch.numero,
@@ -362,7 +385,6 @@ export default function App() {
         });
       }
     }
-    // === FIM DA CORREÇÃO DO LOOP INFINITO ===
 
     finalItems.sort((a: any, b: any) => {
       const numA = parseInt(a.numero);
@@ -387,7 +409,7 @@ export default function App() {
     const file = e.target.files[0];
     if (!file) return;
 
-    e.target.value = ''; // Reseta o input de arquivo (sem dar erro no React/TS)
+    e.target.value = ''; 
     setStatus('loading');
     setErrorMsg('');
 
@@ -781,8 +803,10 @@ export default function App() {
                             <input 
                               type="text" 
                               value={item.grau} 
+                              disabled={item.fase === 'PR'}
+                              title={item.fase === 'PR' ? "Itens PR não recebem nota." : ""}
                               onChange={(e) => updateItem(item.id, 'grau', e.target.value)}
-                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 uppercase ${gradeColorClass}`}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 uppercase ${gradeColorClass} ${item.fase === 'PR' ? 'cursor-not-allowed opacity-50 bg-slate-100/50' : ''}`}
                             />
                           </td>
                           <td className="p-3">
