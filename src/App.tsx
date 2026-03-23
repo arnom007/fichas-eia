@@ -8,6 +8,17 @@ declare global {
   }
 }
 
+// Função para definir a cor baseada no grau/nota
+const getGradeColorClass = (grau: string) => {
+  const g = grau.toUpperCase().trim();
+  if (g === '1' || g === 'PERIGOSO' || g === '2' || g === 'DEFICIENTE') return 'text-red-500 font-bold';
+  if (g === '3' || g === 'PRECISA MELHORAR') return 'text-yellow-600 font-bold';
+  if (g === '4' || g === 'NORMAL') return 'text-green-600 font-bold';
+  if (g === '5' || g === 'DESTACOU-SE') return 'text-blue-500 font-bold';
+  if (g === '6') return 'text-blue-800 font-bold';
+  return 'text-slate-900 font-medium'; // Padrão
+};
+
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
@@ -203,7 +214,8 @@ export default function App() {
     const cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
     const extractedItemsMap = new Map();
 
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(RC|RM|RO|--)\s+([0-9]|N\/O|--)\b/gi;
+    // REGEX ATUALIZADO: Agora suporta 'PR' e torna o grau opcional caso seja um item apenas praticado sem nota.
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(RC|RM|RO|PR|--)(?:\s+([0-9]|N\/O|--))?(?=\s|$|\b)/gi;
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
       const id = crypto.randomUUID();
@@ -212,7 +224,7 @@ export default function App() {
         numero: matchT1[1].trim(),
         nome: matchT1[2].trim(),
         fase: matchT1[3].trim().toUpperCase(),
-        grau: matchT1[4].trim().toUpperCase(),
+        grau: matchT1[4] ? matchT1[4].trim().toUpperCase() : '--', // Proteção para itens PR sem nota
         comentario: ''
       });
     }
@@ -227,7 +239,7 @@ export default function App() {
 
     const cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\b/gi;
+    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|--)\b/gi;
     let matchT2;
     
     while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
@@ -264,8 +276,8 @@ export default function App() {
     // Agora agrupamos TODOS os cabeçalhos de comentários numa única lista primeiro
     const allCommentMatches: any[] = [];
 
-    // 1. Extrai os comentários das manobras normais (com RC, RM, RO)
-    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|--|)\s*\/\s*([A-Za-z0-9À-ÿ\- ]+)\s*\)\s*:?/gi;
+    // 1. Extrai os comentários das manobras normais (com RC, RM, RO, PR)
+    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|PR|--|)\s*\/\s*([A-Za-z0-9À-ÿ\- ]+)\s*\)\s*:?/gi;
     let matchC;
     while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
       allCommentMatches.push({
@@ -279,7 +291,7 @@ export default function App() {
     }
 
     // 2. Extrai os comentários afetivos/cognitivos (sem fase)
-    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|N\/O|--)\s*\)\s*:?/gi;
+    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|--)\s*\)\s*:?/gi;
     let matchAC;
     while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
       allCommentMatches.push({
@@ -737,59 +749,62 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="align-top text-sm">
-                    {items.map((item) => (
-                      <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition">
-                        <td className="p-3">
-                          <input 
-                            type="text" 
-                            value={item.numero} 
-                            onChange={(e) => updateItem(item.id, 'numero', e.target.value)}
-                            className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1"
-                          />
-                        </td>
-                        <td className="p-3 text-slate-900 font-medium">
-                          <input 
-                            type="text" 
-                            value={item.nome} 
-                            onChange={(e) => updateItem(item.id, 'nome', e.target.value)}
-                            className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1"
-                          />
-                        </td>
-                        <td className="p-3 text-slate-600">
-                          <input 
-                            type="text" 
-                            value={item.fase} 
-                            onChange={(e) => updateItem(item.id, 'fase', e.target.value)}
-                            className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-center"
-                          />
-                        </td>
-                        <td className="p-3">
-                          <input 
-                            type="text" 
-                            value={item.grau} 
-                            onChange={(e) => updateItem(item.id, 'grau', e.target.value)}
-                            className={`w-full bg-transparent font-semibold border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 ${item.grau === 'DESTACOU-SE' ? 'text-green-600' : 'text-blue-700'}`}
-                          />
-                        </td>
-                        <td className="p-3">
-                          <textarea 
-                            value={item.comentario} 
-                            onChange={(e) => updateItem(item.id, 'comentario', e.target.value)}
-                            placeholder="Sem comentários para este item"
-                            className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white focus:shadow-sm outline-none px-2 py-1 rounded resize-y min-h-[40px] leading-relaxed ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`}
-                          />
-                        </td>
-                        <td className="p-3 text-center">
-                          <button 
-                            onClick={() => removeItem(item.id)}
-                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition"
-                            title="Remover Item"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {items.map((item) => {
+                      const gradeColorClass = getGradeColorClass(item.grau);
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition">
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.numero} 
+                              onChange={(e) => updateItem(item.id, 'numero', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.nome} 
+                              onChange={(e) => updateItem(item.id, 'nome', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 ${gradeColorClass}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.fase} 
+                              onChange={(e) => updateItem(item.id, 'fase', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-center text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.grau} 
+                              onChange={(e) => updateItem(item.id, 'grau', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 uppercase ${gradeColorClass}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <textarea 
+                              value={item.comentario} 
+                              onChange={(e) => updateItem(item.id, 'comentario', e.target.value)}
+                              placeholder="Sem comentários para este item"
+                              className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white focus:shadow-sm outline-none px-2 py-1 rounded resize-y min-h-[40px] leading-relaxed ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`}
+                            />
+                          </td>
+                          <td className="p-3 text-center">
+                            <button 
+                              onClick={() => removeItem(item.id)}
+                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition"
+                              title="Remover Item"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
                 
