@@ -126,8 +126,8 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // 1. LIMPEZA GLOBAL (Inspirada no seu código de mestre)
-    // Isso aniquila os falsos positivos (Art 44, páginas, cabeçalhos perdidos) em todo o documento!
+    // 1. LIMPEZA GLOBAL
+    // Aniquila os falsos positivos (Art 44, páginas, cabeçalhos perdidos) em todo o documento!
     let globalCleanText = text
       .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
       .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
@@ -136,7 +136,7 @@ export default function App() {
       .replace(/COMANDO DA AERONÁUTICA/gi, '')
       .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
       .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-      .replace(/PROT[\s.:]*\d+/gi, ''); // Mata o protocolo que estava assombrando!
+      .replace(/PROT[\s.:]*\d+/gi, ''); 
 
     // 2. EXTRAÇÃO DE METADADOS
     const headerEndIdx = globalCleanText.search(/1\s*-|Itens Afetivos|Comentários:/i);
@@ -202,7 +202,6 @@ export default function App() {
     const idxComentarios = globalCleanText.search(/Comentários:/i);
 
     let tableStartIndex = 0;
-    // Procuramos o primeiro "1 -" de forma segura
     const firstItemRegex = /(?:^|\n|\r|\s)\b(1\s*-?\s*[A-Za-zÀ-ÿ])/;
     const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
     if (firstItemMatch) {
@@ -213,11 +212,9 @@ export default function App() {
     if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
     else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
 
-    // Isolamos e limpamos quebras de linha da tabela principal
     let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-    // Divide a tabela enorme em fatias, cortando a cada vez que encontra um número de item novo.
-    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-9][0-9])\s*-?\s+(?=[A-Za-zÀ-ÿ])/g;
+    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-9][0-9])\s*[-–—]?\s+(?=[A-Za-zÀ-ÿ])/g;
     let matchT1;
     let lastIndex = 0;
     let lastNum = null;
@@ -228,7 +225,6 @@ export default function App() {
         chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex, matchT1.index).trim() });
       }
       lastNum = matchT1[1];
-      // Avança o ponteiro para capturar a fatia correta
       lastIndex = matchT1.index + matchT1[0].length;
       itemBoundaryRegex.lastIndex = matchT1.index + matchT1[1].length; 
     }
@@ -236,18 +232,16 @@ export default function App() {
       chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex).trim() });
     }
 
-    // Para cada fatia, extraímos Fase e Grau do FINAL do texto. Isso impede de cortar os nomes ao meio!
     for (const chunk of chunks) {
       let name = chunk.text;
       let faseItem = '--';
       let grauItem = '';
 
-      // Lê do final: Encontra PR solto OU Fase+Nota OU só Nota (Instrumentos)
       const endMatchRegex = /(?:\s+)(?:(PR)|(RC\b|RM\b|RO\b|--)\s+([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--)|([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))\s*$/i;
       const matchPG = name.match(endMatchRegex);
 
       if (matchPG) {
-        name = name.substring(0, matchPG.index).trim(); // O que sobra é o nome puro!
+        name = name.substring(0, matchPG.index).trim(); 
         if (matchPG[1]) {
           faseItem = 'PR';
         } else if (matchPG[2]) {
@@ -259,7 +253,6 @@ export default function App() {
         }
       }
 
-      // Limpeza para o Looker Studio
       const grauNorm = grauItem.replace(/\s+/g, '');
       if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
         grauItem = '';
@@ -313,55 +306,50 @@ export default function App() {
 
     let finalItems = Array.from(extractedItemsMap.values());
 
-    // 5. COMENTÁRIOS
+    // 5. COMENTÁRIOS (O LEITOR UNIVERSAL BLINDADO)
     if (idxComentarios !== -1) {
       let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
       const allCommentMatches: any[] = [];
 
-      // Comentários das Tabelas de Manobras
-      const commentHeaderRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:(RC\b|RM\b|RO\b|PR\b|--)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
+      // NOVO REGEX UNIFICADO: Pega TUDO o que estiver dentro dos parênteses (notas, fases, siglas) sem engasgar
+      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
       let matchC;
-      while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
-        let rawFaseC = matchC[3] ? matchC[3].trim() : '--'; 
-        let rawGrauC = matchC[4] ? matchC[4].trim().toUpperCase() : '';
+      
+      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
+        const num = matchC[1].trim();
+        let rawFaseC = '--';
+        let rawGrauC = '';
+        const insideParens = matchC[3].toUpperCase();
 
-        if (rawGrauC === 'PR') {
-          rawFaseC = 'PR';
-          rawGrauC = '';
+        // Interpretador inteligente do conteúdo dos parênteses
+        if (insideParens.includes('/')) {
+           const parts = insideParens.split('/');
+           rawFaseC = parts[0].trim() || '--';
+           rawGrauC = parts[1].trim();
+        } else {
+           const val = insideParens.trim();
+           if (val === 'PR') {
+              rawFaseC = 'PR';
+           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
+              rawGrauC = val;
+           } else {
+              rawFaseC = val;
+           }
         }
 
+        if (rawFaseC === 'PR') rawGrauC = '';
         const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
-        if (rawFaseC === 'PR' || ['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(rawGrauCNorm)) {
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
           rawGrauC = '';
         }
 
         allCommentMatches.push({
           index: matchC.index,
           length: matchC[0].length,
-          numero: matchC[1].trim(),
+          numero: num,
           fase: rawFaseC,
           grau: rawGrauC
-        });
-      }
-
-      // Comentários Afetivos
-      const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:\/\s*)?(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
-      let matchAC;
-      while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
-        let rawGrauAC = matchAC[3] ? matchAC[3].trim().toUpperCase() : '';
-        
-        const rawGrauACNorm = rawGrauAC.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(rawGrauACNorm)) {
-          rawGrauAC = '';
-        }
-
-        allCommentMatches.push({
-          index: matchAC.index,
-          length: matchAC[0].length,
-          numero: matchAC[1].trim(),
-          fase: '--',
-          grau: rawGrauAC
         });
       }
 
