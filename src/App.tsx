@@ -218,18 +218,29 @@ export default function App() {
     }));
 
     // =========================================================================
-    // O RETORNO DO MODELO ESTÁVEL DE ALTA PRECISÃO (REGEX REFINADO)
+    // O RETORNO DO MODELO ESTÁVEL DE ALTA PRECISÃO (A TESOURA DE SEGURANÇA)
     // =========================================================================
     
+    // 🔴 A TESOURA DE SEGURANÇA MÁXIMA 🔴
+    // Encontra onde começa a tabela real procurando exatamente o item 1 (ex: "1- Partida" ou "1- Voo sob Capota")
+    // Isso ignora absolutamente todos os protocolos, datas e horas que vierem antes.
+    let tableStartIndex = 0;
+    const firstItemRegex = /(?:^|\n|\r)\s*["']?\s*(1\s*-?\s*[A-Za-zÀ-ÿ])/;
+    const firstItemMatch = text.match(firstItemRegex);
+    
+    if (firstItemMatch) {
+        // Corta exatamente no "1" da primeira manobra
+        tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
+    } else {
+        // Fallback caso falhe incrivelmente
+        const headerEndMatch = text.match(/TEV[^\d]*\d{2}:\d{2}/i);
+        if (headerEndMatch) {
+            tableStartIndex = headerEndMatch.index! + headerEndMatch[0].length;
+        }
+    }
+
     const idxAfetivos = text.search(/Itens Afetivos/i);
     const idxComentarios = text.search(/Comentários:/i);
-
-    // Encontra onde começa a tabela real
-    const headerEndMatch = text.match(/TEV:\s*\d{2}:\d{2}/i);
-    let tableStartIndex = 0;
-    if (headerEndMatch) {
-        tableStartIndex = headerEndMatch.index! + headerEndMatch[0].length;
-    }
 
     let tableEndIndex = text.length;
     if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
@@ -239,8 +250,7 @@ export default function App() {
     let tableText = text.substring(tableStartIndex, tableEndIndex);
     let cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    // 🔴 A TESOURA DE SEGURANÇA 🔴
-    // Removemos proativamente todo o lixo do rodapé ANTES do regex tentar ler
+    // REMOVE OS RODAPÉS E CABEÇALHOS PERDIDOS QUE CONFUNDIAM O ROBÔ
     cleanTableText = cleanTableText
         .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
         .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
@@ -249,15 +259,15 @@ export default function App() {
         .replace(/COMANDO DA AERONÁUTICA/gi, '')
         .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
         .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+        .replace(/PROT[\s.:]*\d+/gi, '') // Remove o "PROT.: 85935" que possa ter vazado
+        .replace(/TEV[\s.:]*\d{2}:\d{2}/gi, '')
         .replace(/\s{2,}/g, ' ');
 
     const extractedItemsMap = new Map();
 
     // 🟢 O REGEX DE OURO TREINADO PARA "PRÉ-SOLO" E "INSTRUMENTOS (VI)" 🟢
-    // Agora o campo da Fase (RC, RM, RO) é totalmente opcional (graças ao (?:...)?). 
-    // E usamos um Lookahead (?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$)) para ele só parar quando vir a próxima manobra,
-    // garantindo que ele capture nomes grandes como "Curva de grande inclinação".
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$))/gi;
+    // Adicionado a barra (\/) no grupo do nome para ler "Curva de inclinação / Curva de prioridade" sem cortar!
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$))/gi;
     
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
@@ -306,7 +316,7 @@ export default function App() {
           .replace(/--- PAGE \d+ ---/gi, '')
           .replace(/\b\d+\s+de\s+\d+\b/gi, '');
 
-      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
+      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
       let matchT2;
       
       while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
@@ -355,7 +365,7 @@ export default function App() {
 
       const allCommentMatches: any[] = [];
 
-      const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\u0300-\u036f]+?)\s*\(\s*(?:(RC|RM|RO|PR|--|)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
+      const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:(RC|RM|RO|PR|--|)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
       let matchC;
       while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
         let rawFaseC = matchC[3] ? matchC[3].trim() : '--'; 
@@ -381,7 +391,7 @@ export default function App() {
         });
       }
 
-      const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\u0300-\u036f]+?)\s*\(\s*(?:\/\s*)?(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
+      const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:\/\s*)?(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
       let matchAC;
       while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
         let rawGrauAC = matchAC[3] ? matchAC[3].trim().toUpperCase() : '';
