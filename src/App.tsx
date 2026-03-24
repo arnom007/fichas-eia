@@ -124,6 +124,7 @@ export default function App() {
       return newMeta;
     });
   };
+
   const processTextData = (text: string) => {
     // 1. LIMPEZA GLOBAL
     let globalCleanText = text
@@ -213,9 +214,7 @@ export default function App() {
     let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
     // Passo A: Isolar os números das manobras substituindo-os por um Token protegido
-    // Pega os formatos "15 -" ou "15-"
     let maskedTableText = cleanTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*/g, ' __ITEM_$1__ ');
-    // Pega o formato colado "10Tráfego"
     maskedTableText = maskedTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])(?=[A-Za-zÀ-ÿ])/g, ' __ITEM_$1__ ');
 
     // Passo B: Fatiar a string sempre que encontrar uma Fase/Grau
@@ -256,11 +255,10 @@ export default function App() {
         for (let j = 0; j < numMatches.length; j++) {
             const num = numMatches[j][1];
             
-            // Verifica se o nome da manobra veio depois do número ou se foi lido de forma invertida (antes)
             let name = pieces[j+1] ? pieces[j+1].trim() : '';
             if (!name && j === 0) name = pieces[0].trim();
             
-            // Apenas o último item do bloco recebe a nota lida. Se houverem itens encavalados sem nota, ficam neutros.
+            // Apenas o último item do bloco recebe a nota lida
             let finalFase = '--';
             let finalGrau = '';
             if (j === numMatches.length - 1) {
@@ -386,121 +384,6 @@ export default function App() {
 
         let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
 
-        let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
-        
-        if (!foundItem) {
-          foundItem = finalItems.find((item: any) => {
-            const n1 = item.nome.toLowerCase().trim();
-            const n2 = currentMatch.nome.toLowerCase().trim();
-            return n1.includes(n2) || n2.includes(n1);
-          });
-        }
-
-        if (foundItem) {
-          foundItem.comentario = comentarioText;
-          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
-        } else {
-          finalItems.push({
-            id: crypto.randomUUID(),
-            numero: currentMatch.numero,
-            nome: currentMatch.nome,
-            fase: currentMatch.fase,
-            grau: currentMatch.grau,
-            comentario: comentarioText
-          });
-        }
-      }
-    }
-
-    finalItems.sort((a: any, b: any) => {
-      const numA = parseInt(a.numero);
-      const numB = parseInt(b.numero);
-      if (isNaN(numA) && isNaN(numB)) return 0;
-      if (isNaN(numA)) return 1; 
-      if (isNaN(numB)) return -1;
-      return numA - numB;
-    });
-
-    if (finalItems.length > 0) {
-      setItems(finalItems);
-      setStatus('reviewing');
-      setErrorMsg('');
-    } else {
-      setErrorMsg('Não foi possível extrair os itens. Verifique o arquivo enviado.');
-      setStatus('idle');
-    }
-  };
-    let finalItems = Array.from(extractedItemsMap.values());
-
-    // 5. COMENTÁRIOS
-    if (idxComentarios !== -1) {
-      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-
-      const allCommentMatches: any[] = [];
-
-      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
-      let matchC;
-      
-      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
-        const num = matchC[1].trim();
-        const nomeC = matchC[2].trim(); 
-        let rawFaseC = '--';
-        let rawGrauC = '';
-        const insideParens = matchC[3].toUpperCase();
-
-        if (insideParens.includes('/')) {
-           const parts = insideParens.split('/');
-           rawFaseC = parts[0].trim() || '--';
-           rawGrauC = parts[1].trim();
-        } else {
-           const val = insideParens.trim();
-           if (val === 'PR') {
-              rawFaseC = 'PR';
-           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
-              rawGrauC = val;
-           } else {
-              rawFaseC = val;
-           }
-        }
-
-        if (rawFaseC === 'PR') rawGrauC = '';
-        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
-          rawGrauC = '';
-        }
-
-        allCommentMatches.push({
-          index: matchC.index,
-          length: matchC[0].length,
-          numero: num,
-          nome: nomeC, 
-          fase: rawFaseC,
-          grau: rawGrauC
-        });
-      }
-
-      allCommentMatches.sort((a, b) => a.index - b.index);
-
-      for (let i = 0; i < allCommentMatches.length; i++) {
-        const currentMatch = allCommentMatches[i];
-        const startIndex = currentMatch.index + currentMatch.length;
-        let endIndex;
-
-        if (i + 1 < allCommentMatches.length) {
-          endIndex = allCommentMatches[i + 1].index;
-        } else {
-          const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
-          const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
-          
-          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
-          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
-          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
-          else endIndex = cleanComments.length;
-        }
-
-        let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
-
-        // CORREÇÃO 2: Busca por número e, se falhar, busca por nome (para itens afetivos)
         let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
         
         if (!foundItem) {
