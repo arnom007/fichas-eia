@@ -153,6 +153,7 @@ export default function App() {
       finalGrauMissao = '';
     }
 
+    // CORREÇÃO: Agora aceita nomenclaturas complexas com letras e números (ex: PS-X1, VI-01, VMAT PS-02)
     const matchMissao = cleanHeader.match(/\b((?:VMAT\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
@@ -245,30 +246,87 @@ export default function App() {
     const cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
     const extractedItemsMap = new Map();
 
-    // REGEX UNIVERSAL: Fase é opcional! Lida perfeitamente com missões de Instrumentos ("1- Voo sob Capota 5")
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))/gi;
+    // =========================================================================
+    // NOVA ARQUITETURA DE LEITURA (O "Fatiador" de Fichas)
+    // Resolve problemas de textos em múltiplas linhas e itens sem fase (Instrumentos)
+    // =========================================================================
+    
+    // 1. Corta a tabela gigante em "Fatias" exatas, uma para cada número de manobra
+    const tableTextRegex = /(?:\b|^)(\d{1,2})(?:-|\s+-|\s+)(?=[A-Za-zÀ-ÿ])/g;
     let matchT1;
-    while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
-      const isPR = !!matchT1[3];
-      // Se não tiver fase (ex: capota), assumimos '--'
-      const rawFase = isPR ? 'PR' : (matchT1[4] || '--');
-      let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
+    let lastIndex = 0;
+    let lastNum = null;
+    const chunks = [];
 
-      const rawGrauNorm = rawGrau.replace(/\s+/g, ''); 
-      if (rawGrauNorm === '--' || rawGrauNorm === 'N/O' || rawGrauNorm === 'N/A' || rawGrauNorm === 'NR' || rawGrauNorm === 'AN/') {
-        rawGrau = '';
+    while ((matchT1 = tableTextRegex.exec(cleanTableText)) !== null) {
+      if (lastNum !== null) {
+          chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex, matchT1.index).trim() });
       }
-
-      const id = crypto.randomUUID();
-      extractedItemsMap.set(id, {
-        id: id,
-        numero: matchT1[1].trim(),
-        nome: matchT1[2].trim(),
-        fase: rawFase.trim().toUpperCase(),
-        grau: rawGrau,
-        comentario: ''
-      });
+      lastNum = matchT1[1];
+      lastIndex = tableTextRegex.lastIndex;
     }
+    if (lastNum !== null) {
+        chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex).trim() });
+    }
+
+    // 2. Extrai Fase e Grau de cada fatia de trás para frente, evitando pegar números do nome
+    const pgRegex = /(?:\b|\s|^)(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?:\b|\s|$)/gi;
+
+    for (const chunk of chunks) {
+        const allMatches = [...chunk.text.matchAll(pgRegex)];
+        let phaseGradeMatch = null;
+        
+        // Prioriza encontrar um conjunto que tenha a Fase (RC/RM/RO/PR)
+        for (let i = allMatches.length - 1; i >= 0; i--) {
+          if (allMatches[i][1] || allMatches[i][2]) {
+              phaseGradeMatch = allMatches[i];
+              break;
+          }
+        }
+        // Se não tiver fase (como no Voo sob Capota), pega a última nota que sobrou na fatia
+        if (!phaseGradeMatch && allMatches.length > 0) {
+          phaseGradeMatch = allMatches[allMatches.length - 1];
+        }
+
+        let name = chunk.text;
+        let faseItem = '--';
+        let grauItem = '';
+
+        if (phaseGradeMatch) {
+          // Remove a Fase e o Grau com precisão cirúrgica do meio da fatia, sobrando só o nome (Mesmo que seja gigante)
+          name = chunk.text.substring(0, phaseGradeMatch.index) + ' ' + chunk.text.substring(phaseGradeMatch.index + phaseGradeMatch[0].length);
+          name = name.replace(/\s{2,}/g, ' ').trim();
+          
+          if (phaseGradeMatch[1]) {
+              faseItem = 'PR';
+          } else if (phaseGradeMatch[2]) {
+              faseItem = phaseGradeMatch[2].toUpperCase();
+              grauItem = phaseGradeMatch[3].toUpperCase();
+          } else if (phaseGradeMatch[4]) {
+              faseItem = '--';
+              grauItem = phaseGradeMatch[4].toUpperCase();
+          }
+        }
+
+        // Blindagem de dados do Looker Studio
+        const grauNorm = grauItem.replace(/\s+/g, '');
+        if (grauNorm === '--' || grauNorm === 'N/O' || grauNorm === 'N/A' || grauNorm === 'NR' || grauNorm === 'AN/' || grauNorm === 'NÃOOBSERVADO') {
+          grauItem = '';
+        }
+
+        if (name.length > 2) {
+          const id = crypto.randomUUID();
+          extractedItemsMap.set(id, {
+              id: id,
+              numero: chunk.num,
+              nome: name,
+              fase: faseItem,
+              grau: grauItem,
+              comentario: ''
+          });
+        }
+    }
+    // =========================================================================
     
     let affectiveAreaText = text;
     const afetivosStart = text.search(/Itens Afetivos/i);
