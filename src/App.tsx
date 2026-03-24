@@ -126,8 +126,7 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // 1. LIMPEZA GLOBAL 
-    // Aniquila os falsos positivos e textos desnecessários
+    // 1. LIMPEZA GLOBAL
     let globalCleanText = text
       .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
       .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
@@ -138,8 +137,9 @@ export default function App() {
       .replace(/T-27 BÁSICO 20\d{2}/gi, '')
       .replace(/PROT[\s.:]*\d+/gi, ''); 
 
-    // Extrai o cabeçalho original com base na primeira quebra visual
-    const headerEndIdx = globalCleanText.search(/1\s*-|Itens Afetivos|Comentários:/i);
+    // 2. EXTRAÇÃO DE METADADOS
+    // Aprimorado para achar o início mesmo se faltar o traço no "1 Partida"
+    const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
     const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
     const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
@@ -181,11 +181,7 @@ export default function App() {
     const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
     const pousos = matchPousos ? matchPousos[1] : '';
 
-    // Limpeza Global pós-metadados para evitar que números atrapalhem a tabela
-    globalCleanText = globalCleanText
-      .replace(/POUSOS:\s*\d*/gi, '')
-      .replace(/TEV:\s*\d{2}:\d{2}/gi, '');
-
+    // CORREÇÃO 1: Adicionado \b em \bCiente\b para não cortar a palavra "deficiente"
     const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
     let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
 
@@ -207,7 +203,7 @@ export default function App() {
     const idxComentarios = globalCleanText.search(/Comentários:/i);
 
     let tableStartIndex = 0;
-    const firstItemRegex = /(?:^|\n|\r|\s)\b(1\s*-?\s*[A-Za-zÀ-ÿ])/;
+    const firstItemRegex = /(?:^|\n|\r|\s)\b(1\s*[-–—]?\s*(?:Partida|Voo sob Capota))/i;
     const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
     if (firstItemMatch) {
       tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
@@ -219,7 +215,9 @@ export default function App() {
 
     let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-9][0-9])\s*[-–—]?\s+(?=[A-Za-zÀ-ÿ])/g;
+    // A MÁGICA ESTÁ AQUI: \s* no lugar de \s+ garante que "10Tráfego" não quebre a leitura
+    // O [-–—]? permite manobras sem traço (como na PS-X1)
+    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(?=[A-Za-zÀ-ÿ])/g;
     let matchT1;
     let lastIndex = 0;
     let lastNum = null;
@@ -242,7 +240,8 @@ export default function App() {
       let faseItem = '--';
       let grauItem = '';
 
-      const endMatchRegex = /(?:\s+)(?:(PR)|(RC\b|RM\b|RO\b|--)\s+([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--)|([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))\s*$/i;
+      // O endMatchRegex também lida com graus encavalados, ex: "RM5" -> "RM" e "5" e fases em branco
+      const endMatchRegex = /(?:\s+)(?:(PR)|(RC\b|RM\b|RO\b|--)\s*([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--)|([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))\s*$/i;
       const matchPG = name.match(endMatchRegex);
 
       if (matchPG) {
@@ -279,7 +278,7 @@ export default function App() {
       const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
       affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
       
-      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2})/gi;
+      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2}|\b(?:Comentários|Debriefing|Preparo|Raciocínio|Adaptação|Progresso|Reação|Interesse|Iniciativa|Aplicação|Conhecimento|Briefing|Mentalidade))/gi;
       let matchT2;
       
       while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
@@ -298,7 +297,7 @@ export default function App() {
           if(itemName){
             extractedItemsMap.set(itemName, {
               id: crypto.randomUUID(),
-              numero: '',
+              numero: '', 
               nome: itemName,
               fase: '--',
               grau: itemGrau, 
@@ -311,48 +310,96 @@ export default function App() {
 
     let finalItems = Array.from(extractedItemsMap.values());
 
-    // 5. COMENTÁRIOS (A sua lógica robusta!)
+    // 5. COMENTÁRIOS
     if (idxComentarios !== -1) {
-      const commentsText = globalCleanText.substring(idxComentarios + 12); 
-      
-      const commentBlockRegex = /(?:^|\n)\s*(\d{1,2})\s*[-–—]\s*([\s\S]*?)\s*\(\s*(?:([A-Z]{2}|--)?\s*\/\s*)?([A-Za-z0-9\-\/ \u0300-\u036f]+)\s*\)\s*:\s*([\s\S]*?)(?=(?:\n\s*\d{1,2}\s*[-–—]|\n\s*Ass\. Digital|\n\s*Recomendações\/Parecer:|$))/gi;
-      
-      let matchC;
-      while ((matchC = commentBlockRegex.exec(commentsText)) !== null) {
-        const numero = matchC[1].trim();
-        const nome = matchC[2].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-        let faseItem = matchC[3] ? matchC[3].trim().toUpperCase() : '--';
-        let grauItem = matchC[4] ? matchC[4].replace(/\s+/g, '').toUpperCase() : '';
-        let comentario = matchC[5] ? matchC[5].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
-        if (grauItem === 'PR' || faseItem === 'PR') {
-          faseItem = 'PR';
-          grauItem = '';
-        } else if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grauItem)) {
-          grauItem = '';
+      const allCommentMatches: any[] = [];
+
+      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
+      let matchC;
+      
+      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
+        const num = matchC[1].trim();
+        const nomeC = matchC[2].trim(); 
+        let rawFaseC = '--';
+        let rawGrauC = '';
+        const insideParens = matchC[3].toUpperCase();
+
+        if (insideParens.includes('/')) {
+           const parts = insideParens.split('/');
+           rawFaseC = parts[0].trim() || '--';
+           rawGrauC = parts[1].trim();
+        } else {
+           const val = insideParens.trim();
+           if (val === 'PR') {
+              rawFaseC = 'PR';
+           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
+              rawGrauC = val;
+           } else {
+              rawFaseC = val;
+           }
         }
 
-        let foundItem = finalItems.find((item: any) => item.numero === numero);
+        if (rawFaseC === 'PR') rawGrauC = '';
+        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
+          rawGrauC = '';
+        }
+
+        allCommentMatches.push({
+          index: matchC.index,
+          length: matchC[0].length,
+          numero: num,
+          nome: nomeC, 
+          fase: rawFaseC,
+          grau: rawGrauC
+        });
+      }
+
+      allCommentMatches.sort((a, b) => a.index - b.index);
+
+      for (let i = 0; i < allCommentMatches.length; i++) {
+        const currentMatch = allCommentMatches[i];
+        const startIndex = currentMatch.index + currentMatch.length;
+        let endIndex;
+
+        if (i + 1 < allCommentMatches.length) {
+          endIndex = allCommentMatches[i + 1].index;
+        } else {
+          const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
+          const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
+          
+          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
+          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
+          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
+          else endIndex = cleanComments.length;
+        }
+
+        let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
+
+        // CORREÇÃO 2: Busca por número e, se falhar, busca por nome (para itens afetivos)
+        let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
         
         if (!foundItem) {
           foundItem = finalItems.find((item: any) => {
             const n1 = item.nome.toLowerCase().trim();
-            const n2 = nome.toLowerCase().trim();
+            const n2 = currentMatch.nome.toLowerCase().trim();
             return n1.includes(n2) || n2.includes(n1);
           });
         }
 
         if (foundItem) {
-          foundItem.comentario = comentario;
-          if (!foundItem.numero) foundItem.numero = numero;
+          foundItem.comentario = comentarioText;
+          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
         } else {
           finalItems.push({
             id: crypto.randomUUID(),
-            numero: numero,
-            nome: nome,
-            fase: faseItem,
-            grau: grauItem,
-            comentario: comentario
+            numero: currentMatch.numero,
+            nome: currentMatch.nome,
+            fase: currentMatch.fase,
+            grau: currentMatch.grau,
+            comentario: comentarioText
           });
         }
       }
