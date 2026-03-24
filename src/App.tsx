@@ -19,8 +19,9 @@ const getGradeColorClass = (grau: string) => {
   return 'text-slate-900 font-medium'; // Padrão e Vazio
 };
 
-const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full" }: any) => (
-  <div className={widthClass}>
+// Componente MetaInput atualizado para suportar bloqueio (disabled)
+const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false, title = "" }: any) => (
+  <div className={widthClass} title={title}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <input 
       type="text" 
@@ -28,7 +29,8 @@ const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass 
       onChange={onChange} 
       placeholder={placeholder}
       maxLength={maxLength}
-      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium"
+      disabled={disabled}
+      className={`w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-medium ${disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-70' : 'bg-slate-50 text-slate-800 hover:bg-white focus:bg-white'}`}
     />
   </div>
 );
@@ -81,6 +83,7 @@ export default function App() {
     data: '',
     missao: '',
     grauMissao: '', 
+    tipoMissao: 'Normal', // NOVO CAMPO: Padrão é Normal
     pousos: '',
     hdep: '',
     tev: '',
@@ -113,11 +116,18 @@ export default function App() {
   }, []);
 
   const updateMeta = (field: string, value: string) => {
-    // Força trigramas a terem no máximo 3 letras em maiúsculo
     if (field === 'aluno1p' || field === 'instrutor') {
       value = value.toUpperCase().slice(0, 3);
     }
-    setMeta(prev => ({ ...prev, [field]: value }));
+    
+    setMeta(prev => {
+      const newMeta = { ...prev, [field]: value };
+      // Se o usuário mudar manualmente para Abortiva ou Extra, apaga o Grau da Missão automaticamente
+      if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) {
+        newMeta.grauMissao = '';
+      }
+      return newMeta;
+    });
   };
 
   const processTextData = (text: string) => {
@@ -128,7 +138,23 @@ export default function App() {
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
 
-    const matchMissao = cleanHeader.match(/\b([A-Z]{2,3}-\d{2})\b/i);
+    // Auto-deteta o Tipo de Missão pelas palavras-chave no cabeçalho
+    let tipoMissaoDetectado = 'Normal';
+    if (cleanHeader.match(/\bExtra\b/i)) {
+      tipoMissaoDetectado = 'Extra';
+    } else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) {
+      tipoMissaoDetectado = 'Revisão';
+    } else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMAT\b/i)) {
+      tipoMissaoDetectado = 'Abortiva';
+    }
+
+    // Se for Abortiva ou Extra, já garantimos que o grau da missão fica vazio
+    let finalGrauMissao = grauMissao;
+    if (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') {
+      finalGrauMissao = '';
+    }
+
+    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+)?[A-Z]{2,4}-\d{2})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
     const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
@@ -156,7 +182,7 @@ export default function App() {
     }
 
     let textForPousos = cleanHeader;
-    if (missao) textForPousos = textForPousos.replace(missao, '');
+    if (missao) textForPousos = textForPousos.replace(new RegExp(missao, 'i'), '');
     if (data) textForPousos = textForPousos.replace(data, '');
     textForPousos = textForPousos.replace(/\b\d{2}:\d{2}\b/g, ''); 
     if (aeronave) textForPousos = textForPousos.replace(aeronave, '');
@@ -187,7 +213,8 @@ export default function App() {
       aeronave: aeronave,
       data: data,
       missao: missao,
-      grauMissao: grauMissao,
+      grauMissao: finalGrauMissao,
+      tipoMissao: tipoMissaoDetectado,
       pousos: pousos,
       hdep: hdep,
       tev: tev,
@@ -214,17 +241,15 @@ export default function App() {
     const cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
     const extractedItemsMap = new Map();
 
-    // REGEX BLINDADO: Separa obrigatoriamente quem é PR (sem nota) e quem é avaliado (com nota)
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|--))/gi;
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|N\/A|NR|A\s*N\/|--))/gi;
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
-      // Se matchT1[3] existir, significa que caiu na regra do "PR" e não vai puxar número nenhum
       const isPR = !!matchT1[3];
       const rawFase = isPR ? 'PR' : matchT1[4];
-      let rawGrau = isPR ? '' : matchT1[5];
+      let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
 
-      // Proteção de Dados (Looker Studio): Se for traço ou N/O, converte para vazio puro
-      if (rawGrau === '--' || rawGrau === 'N/O') {
+      const rawGrauNorm = rawGrau.replace(/\s+/g, ''); 
+      if (rawGrauNorm === '--' || rawGrauNorm === 'N/O' || rawGrauNorm === 'N/A' || rawGrauNorm === 'NR' || rawGrauNorm === 'AN/') {
         rawGrau = '';
       }
 
@@ -234,7 +259,7 @@ export default function App() {
         numero: matchT1[1].trim(),
         nome: matchT1[2].trim(),
         fase: rawFase.trim().toUpperCase(),
-        grau: rawGrau.trim().toUpperCase(),
+        grau: rawGrau,
         comentario: ''
       });
     }
@@ -249,20 +274,19 @@ export default function App() {
 
     const cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|--)\b/gi;
+    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
     let matchT2;
     
     while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
       let itemName = matchT2[1].trim();
       let itemGrau = matchT2[2].toUpperCase();
 
-      // Proteção de Dados para os Itens Afetivos
-      if (itemGrau === '--' || itemGrau === 'N/O' || itemGrau === 'NÃO OBSERVADO') {
+      const itemGrauNorm = itemGrau.replace(/\s+/g, '');
+      if (itemGrauNorm === '--' || itemGrauNorm === 'N/O' || itemGrauNorm === 'N/A' || itemGrauNorm === 'NR' || itemGrauNorm === 'NÃOOBSERVADO') {
         itemGrau = '';
       }
 
       if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
-        // Limpa possíveis vestígios do grau dentro do nome
         const grauTextToRemove = matchT2[2].toUpperCase();
         itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
 
@@ -291,15 +315,14 @@ export default function App() {
 
     const allCommentMatches: any[] = [];
 
-    // Comentários Manobras
-    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|PR|--|)\s*\/\s*([A-Za-z0-9À-ÿ\- ]+)\s*\)\s*:?/gi;
+    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|PR|--|)\s*\/\s*([A-Za-z0-9À-ÿ\-\/ ]+)\s*\)\s*:?/gi;
     let matchC;
     while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
       let rawFaseC = matchC[3].trim();
-      let rawGrauC = matchC[4].trim();
+      let rawGrauC = matchC[4].trim().toUpperCase();
 
-      // Proteção de Dados: Se no comentário a fase for PR ou o grau for nulo, forçamos o vazio
-      if (rawFaseC === 'PR' || rawGrauC === '--' || rawGrauC === 'N/O' || rawGrauC === 'NÃO OBSERVADO') {
+      const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
+      if (rawFaseC === 'PR' || rawGrauCNorm === '--' || rawGrauCNorm === 'N/O' || rawGrauCNorm === 'N/A' || rawGrauCNorm === 'NR' || rawGrauCNorm === 'AN/' || rawGrauCNorm === 'NÃOOBSERVADO') {
         rawGrauC = '';
       }
 
@@ -313,12 +336,13 @@ export default function App() {
       });
     }
 
-    // Comentários Afetivos
-    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|--)\s*\)\s*:?/gi;
+    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
     let matchAC;
     while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
-      let rawGrauAC = matchAC[3].trim();
-      if (rawGrauAC === '--' || rawGrauAC === 'N/O' || rawGrauAC === 'NÃO OBSERVADO') {
+      let rawGrauAC = matchAC[3].trim().toUpperCase();
+      
+      const rawGrauACNorm = rawGrauAC.replace(/\s+/g, '');
+      if (rawGrauACNorm === '--' || rawGrauACNorm === 'N/O' || rawGrauACNorm === 'N/A' || rawGrauACNorm === 'NR' || rawGrauACNorm === 'NÃOOBSERVADO') {
         rawGrauAC = '';
       }
 
@@ -487,7 +511,7 @@ export default function App() {
       data: meta.data,
       esquadrilha: meta.esquadrilha,
       missao: meta.missao,
-      grauMissao: meta.grauMissao,
+      grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao,
       aluno1p: meta.aluno1p,
       instrutor: meta.instrutor,
       faseMissao: meta.fase,
@@ -500,14 +524,15 @@ export default function App() {
       nome: item.nome,
       faseItem: item.fase,
       grau: item.grau,
-      comentario: item.comentario
+      comentario: item.comentario,
+      tipoMissao: meta.tipoMissao // Adicionado na última coluna do Payload
     }));
   };
 
   const exportToCSV = () => {
     const headers = [
       'Data da Missão', 'Esquadrilha', 'Missão', 'Grau da Missão', '1P / AL', 'IN', 'Fase da Missão', 'Aeronave', 'H. Dep', 'Pousos', 'TEV',
-      'Parecer/Recomendações', 'Nº do Item', 'Nome da Manobra/Item', 'Fase do Item', 'Grau/Menção', 'Comentário'
+      'Parecer/Recomendações', 'Nº do Item', 'Nome da Manobra/Item', 'Fase do Item', 'Grau/Menção', 'Comentário', 'Tipo de Missão'
     ];
     
     const payload = buildPayloadData();
@@ -517,7 +542,7 @@ export default function App() {
       ...payload.map(row => {
         const cleanComentario = row.comentario ? row.comentario.replace(/"/g, '""') : ''; 
         const cleanParecer = row.parecer ? row.parecer.replace(/"/g, '""') : ''; 
-        return `"${row.data}","${row.esquadrilha}","${row.missao}","${row.grauMissao}","${row.aluno1p}","${row.instrutor}","${row.faseMissao}","${row.aeronave}","${row.hdep}","${row.pousos}","${row.tev}","${cleanParecer}","${row.numero}","${row.nome}","${row.faseItem}","${row.grau}","${cleanComentario}"`;
+        return `"${row.data}","${row.esquadrilha}","${row.missao}","${row.grauMissao}","${row.aluno1p}","${row.instrutor}","${row.faseMissao}","${row.aeronave}","${row.hdep}","${row.pousos}","${row.tev}","${cleanParecer}","${row.numero}","${row.nome}","${row.faseItem}","${row.grau}","${cleanComentario}","${row.tipoMissao}"`;
       })
     ].join('\n');
 
@@ -578,6 +603,8 @@ export default function App() {
       setItems([]);
     }
   };
+
+  const isGrauDisabled = meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra';
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
@@ -698,6 +725,7 @@ export default function App() {
                 </span>
               </div>
               
+              {/* LAYOUT ALINHADO: Exatamente 12 itens formando 2 fileiras preenchidas perfeitamente */}
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                 <MetaSelect 
                   label="Esquadrilha *" 
@@ -708,7 +736,19 @@ export default function App() {
                 <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
                 <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="HNI" />
                 <MetaInput label="Missão" value={meta.missao} onChange={(e: any) => updateMeta('missao', e.target.value)} />
-                <MetaInput label="Grau da Missão" value={meta.grauMissao} onChange={(e: any) => updateMeta('grauMissao', e.target.value)} />
+                <MetaInput 
+                  label="Grau da Missão" 
+                  value={isGrauDisabled ? '' : meta.grauMissao} 
+                  onChange={(e: any) => updateMeta('grauMissao', e.target.value)} 
+                  disabled={isGrauDisabled}
+                  title={isGrauDisabled ? 'Missões Abortivas ou Extras não possuem grau.' : ''}
+                />
+                <MetaSelect 
+                  label="Tipo de Missão" 
+                  value={meta.tipoMissao} 
+                  onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} 
+                  options={['Normal', 'Abortiva', 'Extra', 'Revisão']} 
+                />
                 <MetaInput label="Data" value={meta.data} onChange={(e: any) => updateMeta('data', e.target.value)} />
                 <MetaInput label="Fase" value={meta.fase} onChange={(e: any) => updateMeta('fase', e.target.value)} />
                 <MetaInput label="Aeronave" value={meta.aeronave} onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
