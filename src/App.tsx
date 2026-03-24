@@ -138,7 +138,6 @@ export default function App() {
       .replace(/PROT[\s.:]*\d+/gi, ''); 
 
     // 2. EXTRAÇÃO DE METADADOS
-    // Aprimorado para achar o início mesmo se faltar o traço no "1 Partida"
     const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
     const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
     const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
@@ -181,7 +180,6 @@ export default function App() {
     const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
     const pousos = matchPousos ? matchPousos[1] : '';
 
-    // CORREÇÃO 1: Adicionado \b em \bCiente\b para não cortar a palavra "deficiente"
     const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
     let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
 
@@ -196,14 +194,14 @@ export default function App() {
       parecer: parecerStr
     }));
 
-    // 3. EXTRAÇÃO DAS TABELAS
+    // 3. EXTRAÇÃO DAS TABELAS COM TOKENIZAÇÃO
     const extractedItemsMap = new Map();
 
     const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
     const idxComentarios = globalCleanText.search(/Comentários:/i);
 
     let tableStartIndex = 0;
-    const firstItemRegex = /(?:^|\n|\r|\s)\b(1\s*[-–—]?\s*(?:Partida|Voo sob Capota))/i;
+    const firstItemRegex = /(?:^|\n|\r|\s)\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i;
     const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
     if (firstItemMatch) {
       tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
@@ -215,46 +213,36 @@ export default function App() {
 
     let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-    // A MÁGICA ESTÁ AQUI: \s* no lugar de \s+ garante que "10Tráfego" não quebre a leitura
-    // O [-–—]? permite manobras sem traço (como na PS-X1)
-    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(?=[A-Za-zÀ-ÿ])/g;
-    let matchT1;
-    let lastIndex = 0;
-    let lastNum = null;
-    const chunks = [];
+    // Passo A: Isolar os números das manobras substituindo-os por um Token protegido
+    // Pega os formatos "15 -" ou "15-"
+    let maskedTableText = cleanTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*/g, ' __ITEM_$1__ ');
+    // Pega o formato colado "10Tráfego"
+    maskedTableText = maskedTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])(?=[A-Za-zÀ-ÿ])/g, ' __ITEM_$1__ ');
 
-    while ((matchT1 = itemBoundaryRegex.exec(cleanTableText)) !== null) {
-      if (lastNum !== null) {
-        chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex, matchT1.index).trim() });
-      }
-      lastNum = matchT1[1];
-      lastIndex = matchT1.index + matchT1[0].length;
-      itemBoundaryRegex.lastIndex = matchT1.index + matchT1[1].length; 
-    }
-    if (lastNum !== null) {
-      chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex).trim() });
-    }
+    // Passo B: Fatiar a string sempre que encontrar uma Fase/Grau
+    const pgRegex = /(?:\s+|^)(PR|(?:RC|RM|RO|--)\s*(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)|[1-6]|N\/O|N\/A|NR|A\s*N\/)(?=\s|$)/i;
+    const parts = maskedTableText.split(pgRegex);
 
-    for (const chunk of chunks) {
-      let name = chunk.text;
+    for (let i = 0; i < parts.length - 1; i += 2) {
+      let rawText = parts[i].trim();
+      let rawPG = parts[i + 1].trim();
+      
+      if (!rawText && !rawPG) continue;
+
+      const numMatches = Array.from(rawText.matchAll(/__ITEM_(\d{1,2})__/g));
+      
       let faseItem = '--';
       let grauItem = '';
-
-      // O endMatchRegex também lida com graus encavalados, ex: "RM5" -> "RM" e "5" e fases em branco
-      const endMatchRegex = /(?:\s+)(?:(PR)|(RC\b|RM\b|RO\b|--)\s*([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--)|([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))\s*$/i;
-      const matchPG = name.match(endMatchRegex);
-
-      if (matchPG) {
-        name = name.substring(0, matchPG.index).trim(); 
-        if (matchPG[1]) {
-          faseItem = 'PR';
-        } else if (matchPG[2]) {
-          faseItem = matchPG[2].toUpperCase();
-          grauItem = matchPG[3].toUpperCase();
-        } else if (matchPG[4]) {
-          faseItem = '--';
-          grauItem = matchPG[4].toUpperCase();
-        }
+      const pgUpper = rawPG.toUpperCase();
+      
+      if (pgUpper === 'PR') {
+         faseItem = 'PR';
+      } else if (pgUpper.includes(' ')) {
+         const spl = pgUpper.split(/\s+/);
+         faseItem = spl[0];
+         grauItem = spl[1];
+      } else {
+         grauItem = pgUpper;
       }
 
       const grauNorm = grauItem.replace(/\s+/g, '');
@@ -262,14 +250,35 @@ export default function App() {
         grauItem = '';
       }
 
-      extractedItemsMap.set(chunk.num, {
-        id: crypto.randomUUID(),
-        numero: chunk.num,
-        nome: name,
-        fase: faseItem,
-        grau: grauItem,
-        comentario: ''
-      });
+      // Passo C: Associar os números encontrados à nota extraída
+      if (numMatches.length > 0) {
+        const pieces = rawText.split(/__ITEM_\d{1,2}__/);
+        
+        for (let j = 0; j < numMatches.length; j++) {
+            const num = numMatches[j][1];
+            
+            // Verifica se o nome da manobra veio depois do número ou se foi lido de forma invertida (antes)
+            let name = pieces[j+1] ? pieces[j+1].trim() : '';
+            if (!name && j === 0) name = pieces[0].trim();
+            
+            // Apenas o último item do bloco recebe a nota lida. Se houverem itens encavalados sem nota, ficam neutros.
+            let finalFase = '--';
+            let finalGrau = '';
+            if (j === numMatches.length - 1) {
+                finalFase = faseItem;
+                finalGrau = grauItem;
+            }
+
+            extractedItemsMap.set(num, {
+              id: crypto.randomUUID(),
+              numero: num,
+              nome: name,
+              fase: finalFase,
+              grau: finalGrau,
+              comentario: ''
+            });
+        }
+      }
     }
 
     // 4. ITENS AFETIVOS
@@ -308,6 +317,120 @@ export default function App() {
       }
     }
 
+    let finalItems = Array.from(extractedItemsMap.values());
+
+    // 5. COMENTÁRIOS
+    if (idxComentarios !== -1) {
+      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+
+      const allCommentMatches: any[] = [];
+
+      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
+      let matchC;
+      
+      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
+        const num = matchC[1].trim();
+        const nomeC = matchC[2].trim(); 
+        let rawFaseC = '--';
+        let rawGrauC = '';
+        const insideParens = matchC[3].toUpperCase();
+
+        if (insideParens.includes('/')) {
+           const parts = insideParens.split('/');
+           rawFaseC = parts[0].trim() || '--';
+           rawGrauC = parts[1].trim();
+        } else {
+           const val = insideParens.trim();
+           if (val === 'PR') {
+              rawFaseC = 'PR';
+           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
+              rawGrauC = val;
+           } else {
+              rawFaseC = val;
+           }
+        }
+
+        if (rawFaseC === 'PR') rawGrauC = '';
+        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
+          rawGrauC = '';
+        }
+
+        allCommentMatches.push({
+          index: matchC.index,
+          length: matchC[0].length,
+          numero: num,
+          nome: nomeC, 
+          fase: rawFaseC,
+          grau: rawGrauC
+        });
+      }
+
+      allCommentMatches.sort((a, b) => a.index - b.index);
+
+      for (let i = 0; i < allCommentMatches.length; i++) {
+        const currentMatch = allCommentMatches[i];
+        const startIndex = currentMatch.index + currentMatch.length;
+        let endIndex;
+
+        if (i + 1 < allCommentMatches.length) {
+          endIndex = allCommentMatches[i + 1].index;
+        } else {
+          const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
+          const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
+          
+          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
+          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
+          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
+          else endIndex = cleanComments.length;
+        }
+
+        let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
+
+        let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
+        
+        if (!foundItem) {
+          foundItem = finalItems.find((item: any) => {
+            const n1 = item.nome.toLowerCase().trim();
+            const n2 = currentMatch.nome.toLowerCase().trim();
+            return n1.includes(n2) || n2.includes(n1);
+          });
+        }
+
+        if (foundItem) {
+          foundItem.comentario = comentarioText;
+          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
+        } else {
+          finalItems.push({
+            id: crypto.randomUUID(),
+            numero: currentMatch.numero,
+            nome: currentMatch.nome,
+            fase: currentMatch.fase,
+            grau: currentMatch.grau,
+            comentario: comentarioText
+          });
+        }
+      }
+    }
+
+    finalItems.sort((a: any, b: any) => {
+      const numA = parseInt(a.numero);
+      const numB = parseInt(b.numero);
+      if (isNaN(numA) && isNaN(numB)) return 0;
+      if (isNaN(numA)) return 1; 
+      if (isNaN(numB)) return -1;
+      return numA - numB;
+    });
+
+    if (finalItems.length > 0) {
+      setItems(finalItems);
+      setStatus('reviewing');
+      setErrorMsg('');
+    } else {
+      setErrorMsg('Não foi possível extrair os itens. Verifique o arquivo enviado.');
+      setStatus('idle');
+    }
+  }
     let finalItems = Array.from(extractedItemsMap.values());
 
     // 5. COMENTÁRIOS
