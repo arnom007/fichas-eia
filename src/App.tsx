@@ -218,21 +218,17 @@ export default function App() {
     }));
 
     // =========================================================================
-    // NOVA ARQUITETURA BLINDADA DE LEITURA 
-    // Isola perfeitamente a tabela eliminando qualquer lixo de Cabeçalho e Rodapé
+    // O RETORNO DO MODELO ESTÁVEL: Isolamento de Tabela e Regex de Alta Precisão
     // =========================================================================
     
     const idxAfetivos = text.search(/Itens Afetivos/i);
     const idxComentarios = text.search(/Comentários:/i);
 
-    // Encontra onde começa a tabela real (Logo após o TEV)
+    // Encontra onde começa a tabela real (Logo após o TEV) para não ler "01 DATA"
     const headerEndMatch = text.match(/TEV:\s*\d{2}:\d{2}/i);
     let tableStartIndex = 0;
     if (headerEndMatch) {
         tableStartIndex = headerEndMatch.index! + headerEndMatch[0].length;
-    } else {
-        const firstItemMatch = text.match(/\b1(?:-|\s+-|\s+)[A-Za-zÀ-ÿ]/);
-        if (firstItemMatch) tableStartIndex = firstItemMatch.index!;
     }
 
     let tableEndIndex = text.length;
@@ -243,7 +239,7 @@ export default function App() {
     let tableText = text.substring(tableStartIndex, tableEndIndex);
     let cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    // REMOVE OS RODAPÉS ASSASSINOS ANTES DO FATIAMENTO
+    // REMOVE OS RODAPÉS ASSASSINOS QUE CONFUNDIAM O ROBÔ
     cleanTableText = cleanTableText
         .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
         .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
@@ -254,77 +250,46 @@ export default function App() {
 
     const extractedItemsMap = new Map();
 
-    const tableTextRegex = /(?:\b|^)(\d{1,2})(?:-|\s+-|\s+)(?=[A-Za-zÀ-ÿ])/g;
+    // REGEX ESTÁVEL (AGORA ACEITANDO ITENS SEM FASE PARA O PIMO DE INSTRUMENTOS)
+    // Grupo 1: Número
+    // Grupo 2: Nome da Manobra (agora não avança se encontrar a nota)
+    // Grupo 3: PR 
+    // Grupo 4: Fase (RC, RM, RO, --) - Opcional
+    // Grupo 5: Grau (1-6, N/O, N/A, NR)
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s|$|\b\d{1,2})/gi;
+    
     let matchT1;
-    let lastIndex = 0;
-    let lastNum = null;
-    const chunks = [];
+    while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
+      const isPR = !!matchT1[3];
+      const rawFase = isPR ? 'PR' : (matchT1[4] || '--');
+      let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
 
-    while ((matchT1 = tableTextRegex.exec(cleanTableText)) !== null) {
-      if (lastNum !== null) {
-          chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex, matchT1.index).trim() });
+      const rawGrauNorm = rawGrau.replace(/\s+/g, ''); 
+      if (rawGrauNorm === '--' || rawGrauNorm === 'N/O' || rawGrauNorm === 'N/A' || rawGrauNorm === 'NR' || rawGrauNorm === 'AN/') {
+        rawGrau = '';
       }
-      lastNum = matchT1[1];
-      lastIndex = tableTextRegex.lastIndex;
-    }
-    if (lastNum !== null) {
-        chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex).trim() });
-    }
 
-    const pgRegex = /(?:\b|\s|^)(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?:\b|\s|$)/gi;
+      // Proteção contra leitura de lixos ("DATA:", "H. DEP:", etc)
+      const possibleName = matchT1[2].trim();
+      if (possibleName.toUpperCase().startsWith("DATA") || possibleName.toUpperCase().startsWith("H. DEP") || possibleName.toUpperCase().startsWith("AERO")) {
+        continue;
+      }
 
-    for (const chunk of chunks) {
-        const allMatches = [...chunk.text.matchAll(pgRegex)];
-        let phaseGradeMatch = null;
-        
-        for (let i = allMatches.length - 1; i >= 0; i--) {
-          if (allMatches[i][1] || allMatches[i][2]) {
-              phaseGradeMatch = allMatches[i];
-              break;
-          }
-        }
-        if (!phaseGradeMatch && allMatches.length > 0) {
-          phaseGradeMatch = allMatches[allMatches.length - 1];
-        }
-
-        let name = chunk.text;
-        let faseItem = '--';
-        let grauItem = '';
-
-        if (phaseGradeMatch) {
-          name = chunk.text.substring(0, phaseGradeMatch.index!) + ' ' + chunk.text.substring(phaseGradeMatch.index! + phaseGradeMatch[0].length);
-          name = name.replace(/\s{2,}/g, ' ').trim();
-          
-          if (phaseGradeMatch[1]) {
-              faseItem = 'PR';
-          } else if (phaseGradeMatch[2]) {
-              faseItem = phaseGradeMatch[2].toUpperCase();
-              grauItem = phaseGradeMatch[3].toUpperCase();
-          } else if (phaseGradeMatch[4]) {
-              faseItem = '--';
-              grauItem = phaseGradeMatch[4].toUpperCase();
-          }
-        }
-
-        const grauNorm = grauItem.replace(/\s+/g, '');
-        if (grauNorm === '--' || grauNorm === 'N/O' || grauNorm === 'N/A' || grauNorm === 'NR' || grauNorm === 'AN/' || grauNorm === 'NÃOOBSERVADO') {
-          grauItem = '';
-        }
-
-        if (name.length > 2) {
-          const id = crypto.randomUUID();
-          extractedItemsMap.set(id, {
-              id: id,
-              numero: chunk.num,
-              nome: name,
-              fase: faseItem,
-              grau: grauItem,
-              comentario: ''
-          });
-        }
+      const id = crypto.randomUUID();
+      extractedItemsMap.set(id, {
+        id: id,
+        numero: matchT1[1].trim(),
+        nome: possibleName,
+        fase: rawFase.trim().toUpperCase(),
+        grau: rawGrau,
+        comentario: ''
+      });
     }
     
-    // TABLE 2: AFFECTIVE
+    // =========================================================================
+    // FIM DA LEITURA DA TABELA 1 - INÍCIO DOS ITENS AFETIVOS
+    // =========================================================================
+
     let affectiveAreaText = '';
     if (idxAfetivos !== -1) {
       const affEndIndex = idxComentarios !== -1 ? idxComentarios : text.length;
@@ -801,6 +766,7 @@ export default function App() {
                 </span>
               </div>
               
+              {/* LAYOUT ALINHADO: Exatamente 12 itens formando 2 fileiras preenchidas perfeitamente */}
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                 <MetaSelect 
                   label="Esquadrilha *" 
