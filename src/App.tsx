@@ -19,7 +19,7 @@ const getGradeColorClass = (grau: string) => {
   return 'text-slate-900 font-medium'; // Padrão e Vazio
 };
 
-// Componente MetaInput atualizado para suportar bloqueio (disabled)
+// Componente MetaInput
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false, title = "" }: any) => (
   <div className={widthClass} title={title}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
@@ -66,12 +66,10 @@ export default function App() {
   const [items, setItems] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   
-  // Estado do Modal de Envio
   const [showModal, setShowModal] = useState(false);
-  const [modalState, setModalState] = useState('sending'); // 'sending', 'success', 'error'
+  const [modalState, setModalState] = useState('sending'); 
   const [modalMessage, setModalMessage] = useState('');
 
-  // SEU WEBHOOK FIXO E SEGURO
   const WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxLlUKIeUnaLW2VeWOpIG5ZtrrAFy_Qg9YQTq5fG4HrMUg7kt196zcFAt4jOjBrMsEE/exec";
 
   const [meta, setMeta] = useState({
@@ -83,7 +81,7 @@ export default function App() {
     data: '',
     missao: '',
     grauMissao: '', 
-    tipoMissao: 'Normal', // NOVO CAMPO: Padrão é Normal
+    tipoMissao: 'Normal', 
     pousos: '',
     hdep: '',
     tev: '',
@@ -91,22 +89,20 @@ export default function App() {
   });
 
   useEffect(() => {
-    // Força a limpeza dos estilos padrão do Vite que "espremem" a tela
     document.body.style.display = 'block';
     document.body.style.margin = '0';
-    document.documentElement.style.backgroundColor = '#f8fafc'; // Garante o fundo claro (slate-50)
+    document.documentElement.style.backgroundColor = '#f8fafc'; 
     
     const rootNode = document.getElementById('root');
     if (rootNode) {
       rootNode.style.width = '100%';
       rootNode.style.minHeight = '100vh';
-      rootNode.style.maxWidth = 'none'; // Quebra o limite de 1280px do App.css do Vite
+      rootNode.style.maxWidth = 'none'; 
       rootNode.style.padding = '0';
       rootNode.style.margin = '0';
       rootNode.style.textAlign = 'left';
     }
 
-    // Injeta a biblioteca de leitura de PDF do lado do cliente
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
     script.onload = () => {
@@ -122,7 +118,6 @@ export default function App() {
     
     setMeta(prev => {
       const newMeta = { ...prev, [field]: value };
-      // Se o usuário mudar manualmente para Abortiva ou Extra, apaga o Grau da Missão automaticamente
       if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) {
         newMeta.grauMissao = '';
       }
@@ -131,9 +126,9 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // 1. LIMPEZA GLOBAL DE RODAPÉS E CABEÇALHOS PERDIDOS
-    // Removemos os textos de cabeçalho/rodapé antes de qualquer extração para evitar falsos positivos
-    let cleanText = text
+    // 1. LIMPEZA GLOBAL (Inspirada no seu código de mestre)
+    // Isso aniquila os falsos positivos (Art 44, páginas, cabeçalhos perdidos) em todo o documento!
+    let globalCleanText = text
       .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
       .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
       .replace(/--- PAGE \d+ ---/gi, '')
@@ -141,12 +136,11 @@ export default function App() {
       .replace(/COMANDO DA AERONÁUTICA/gi, '')
       .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
       .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-      .replace(/POUSOS:\s*\d*/gi, '')
-      .replace(/TEV:\s*\d{2}:\d{2}/gi, '');
+      .replace(/PROT[\s.:]*\d+/gi, ''); // Mata o protocolo que estava assombrando!
 
     // 2. EXTRAÇÃO DE METADADOS
-    const headerEndIdx = cleanText.search(/1\s*-|Itens Afetivos|Comentários:/i);
-    const headerText = headerEndIdx !== -1 ? cleanText.substring(0, headerEndIdx) : cleanText;
+    const headerEndIdx = globalCleanText.search(/1\s*-|Itens Afetivos|Comentários:/i);
+    const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
     const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
     const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
@@ -171,7 +165,8 @@ export default function App() {
       hdep = times[0][1];
       tev = times[times.length - 1][1]; 
     } else if (times.length === 1) {
-      hdep = times[0][1];
+      if (/TEV[^\d]*\d{2}:\d{2}/i.test(singleLineHeader)) tev = times[0][1];
+      else hdep = times[0][1];
     }
 
     let fase = '';
@@ -183,190 +178,118 @@ export default function App() {
     const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
     const aeronave = matchAeronave ? matchAeronave[1] : '';
 
-    const parecerMatch = cleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=Ciente|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
+    const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
+    const pousos = matchPousos ? matchPousos[1] : '';
+
+    const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=Ciente|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
     let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
-
-    setMeta(prev => ({
-      ...prev,
-      fase, aeronave, data, missao,
-      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
-      tipoMissao: tipoMissaoDetectado, hdep, tev, parecer: parecerStr
-    }));
-
-    // 3. EXTRAÇÃO DE COMENTÁRIOS E ITENS
-    const extractedItemsMap = new Map();
-    const idxComentarios = cleanText.search(/Comentários:/i);
-    
-    if (idxComentarios !== -1) {
-      const commentsText = cleanText.substring(idxComentarios + 12); // Pula a palavra "Comentários:"
-      
-      // RegEx aprimorado: Busca números de itens seguidos de traço, permitindo quebras de linha até os parênteses da nota
-      const commentBlockRegex = /(?:^|\n)\s*(\d{1,2})\s*-\s*([\s\S]*?)\s*\(\s*(?:([A-Z]{2}|--)?\s*\/\s*)?([A-Za-z0-9\-\/ \u0300-\u036f]+)\s*\)\s*:\s*([\s\S]*?)(?=(?:\n\s*\d{1,2}\s*-|\n\s*Ass\. Digital|\n\s*Recomendações\/Parecer:|$))/gi;
-      
-      let match;
-      while ((match = commentBlockRegex.exec(commentsText)) !== null) {
-        const numero = match[1].trim();
-        const nome = match[2].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-        let faseItem = match[3] ? match[3].trim().toUpperCase() : '--';
-        let grauItem = match[4] ? match[4].replace(/\s+/g, '').toUpperCase() : '';
-        let comentario = match[5] ? match[5].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
-
-        // Tratamento especial para PR e itens sem nota
-        if (grauItem === 'PR' || faseItem === 'PR') {
-          faseItem = 'PR';
-          grauItem = '';
-        } else if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grauItem)) {
-          grauItem = '';
-        }
-
-        extractedItemsMap.set(numero, {
-          id: crypto.randomUUID(),
-          numero,
-          nome,
-          fase: faseItem,
-          grau: grauItem,
-          comentario
-        });
-      }
-    }
-
-    // Ordenar e atualizar o estado
-    const finalItems = Array.from(extractedItemsMap.values()).sort((a, b) => parseInt(a.numero) - parseInt(b.numero));
-
-    if (finalItems.length > 0) {
-      setItems(finalItems);
-      setStatus('reviewing');
-      setErrorMsg('');
-    } else {
-      setErrorMsg('A leitura automática não encontrou itens comentados. Verifique se o formato do PDF está legível ou adicione os itens manualmente.');
-      setStatus('idle');
-    }
-  }
 
     setMeta(prev => ({
       esquadrilha: prev.esquadrilha, 
       aluno1p: prev.aluno1p,         
       instrutor: prev.instrutor,     
-      fase: fase,
-      aeronave: aeronave,
-      data: data,
-      missao: missao,
-      grauMissao: finalGrauMissao,
+      fase, aeronave, data, missao,
+      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
       tipoMissao: tipoMissaoDetectado,
-      pousos: pousos,
-      hdep: hdep,
-      tev: tev,
+      pousos, hdep, tev,
       parecer: parecerStr
     }));
 
-    // =========================================================================
-    // O RETORNO DO MODELO ESTÁVEL DE ALTA PRECISÃO (A TESOURA DE SEGURANÇA)
-    // =========================================================================
-    
-    // 🔴 A TESOURA DE SEGURANÇA MÁXIMA 🔴
-    // Encontra onde começa a tabela real procurando exatamente o item 1 (ex: "1- Partida" ou "1- Voo sob Capota")
-    // Isso ignora absolutamente todos os protocolos, datas e horas que vierem antes.
+    // 3. EXTRAÇÃO DAS TABELAS (O "Fatiador Blindado")
+    const extractedItemsMap = new Map();
+
+    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
+    const idxComentarios = globalCleanText.search(/Comentários:/i);
+
     let tableStartIndex = 0;
-    const firstItemRegex = /(?:^|\n|\r)\s*["']?\s*(1\s*-?\s*[A-Za-zÀ-ÿ])/;
-    const firstItemMatch = text.match(firstItemRegex);
-    
+    // Procuramos o primeiro "1 -" de forma segura
+    const firstItemRegex = /(?:^|\n|\r|\s)\b(1\s*-?\s*[A-Za-zÀ-ÿ])/;
+    const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
     if (firstItemMatch) {
-        // Corta exatamente no "1" da primeira manobra
-        tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
-    } else {
-        // Fallback caso falhe incrivelmente
-        const headerEndMatch = text.match(/TEV[^\d]*\d{2}:\d{2}/i);
-        if (headerEndMatch) {
-            tableStartIndex = headerEndMatch.index! + headerEndMatch[0].length;
-        }
+      tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
     }
 
-    const idxAfetivos = text.search(/Itens Afetivos/i);
-    const idxComentarios = text.search(/Comentários:/i);
-
-    let tableEndIndex = text.length;
+    let tableEndIndex = globalCleanText.length;
     if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
     else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
 
-    // Isola o texto APENAS da tabela
-    let tableText = text.substring(tableStartIndex, tableEndIndex);
-    let cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
+    // Isolamos e limpamos quebras de linha da tabela principal
+    let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-    // REMOVE OS RODAPÉS E CABEÇALHOS PERDIDOS QUE CONFUNDIAM O ROBÔ
-    cleanTableText = cleanTableText
-        .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-        .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-        .replace(/--- PAGE \d+ ---/gi, '')
-        .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-        .replace(/COMANDO DA AERONÁUTICA/gi, '')
-        .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
-        .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-        .replace(/PROT[\s.:]*\d+/gi, '') // Remove o "PROT.: 85935" que possa ter vazado
-        .replace(/TEV[\s.:]*\d{2}:\d{2}/gi, '')
-        .replace(/\s{2,}/g, ' ');
-
-    const extractedItemsMap = new Map();
-
-    // 🟢 O REGEX DE OURO TREINADO PARA "PRÉ-SOLO" E "INSTRUMENTOS (VI)" 🟢
-    // Adicionado a barra (\/) no grupo do nome para ler "Curva de inclinação / Curva de prioridade" sem cortar!
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$))/gi;
-    
+    // Divide a tabela enorme em fatias, cortando a cada vez que encontra um número de item novo.
+    const itemBoundaryRegex = /(?:^|\s)(0?[1-9]|[1-9][0-9])\s*-?\s+(?=[A-Za-zÀ-ÿ])/g;
     let matchT1;
-    while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
-      const isPR = !!matchT1[3];
-      // Se tiver fase, pega ela. Se não tiver (como em Instrumentos), coloca '--'
-      const rawFase = isPR ? 'PR' : (matchT1[4] || '--');
-      let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
+    let lastIndex = 0;
+    let lastNum = null;
+    const chunks = [];
 
-      const rawGrauNorm = rawGrau.replace(/\s+/g, ''); 
-      if (rawGrauNorm === '--' || rawGrauNorm === 'N/O' || rawGrauNorm === 'N/A' || rawGrauNorm === 'NR' || rawGrauNorm === 'AN/') {
-        rawGrau = '';
+    while ((matchT1 = itemBoundaryRegex.exec(cleanTableText)) !== null) {
+      if (lastNum !== null) {
+        chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex, matchT1.index).trim() });
+      }
+      lastNum = matchT1[1];
+      // Avança o ponteiro para capturar a fatia correta
+      lastIndex = matchT1.index + matchT1[0].length;
+      itemBoundaryRegex.lastIndex = matchT1.index + matchT1[1].length; 
+    }
+    if (lastNum !== null) {
+      chunks.push({ num: lastNum, text: cleanTableText.substring(lastIndex).trim() });
+    }
+
+    // Para cada fatia, extraímos Fase e Grau do FINAL do texto. Isso impede de cortar os nomes ao meio!
+    for (const chunk of chunks) {
+      let name = chunk.text;
+      let faseItem = '--';
+      let grauItem = '';
+
+      // Lê do final: Encontra PR solto OU Fase+Nota OU só Nota (Instrumentos)
+      const endMatchRegex = /(?:\s+)(?:(PR)|(RC\b|RM\b|RO\b|--)\s+([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--)|([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))\s*$/i;
+      const matchPG = name.match(endMatchRegex);
+
+      if (matchPG) {
+        name = name.substring(0, matchPG.index).trim(); // O que sobra é o nome puro!
+        if (matchPG[1]) {
+          faseItem = 'PR';
+        } else if (matchPG[2]) {
+          faseItem = matchPG[2].toUpperCase();
+          grauItem = matchPG[3].toUpperCase();
+        } else if (matchPG[4]) {
+          faseItem = '--';
+          grauItem = matchPG[4].toUpperCase();
+        }
       }
 
-      // Proteção de Segurança: Ignora lixos perdidos
-      const possibleName = matchT1[2].trim();
-      if (possibleName.toUpperCase().startsWith("DATA") || possibleName.toUpperCase().startsWith("H. DEP") || possibleName.toUpperCase().startsWith("AERO")) {
-        continue;
+      // Limpeza para o Looker Studio
+      const grauNorm = grauItem.replace(/\s+/g, '');
+      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
+        grauItem = '';
       }
 
-      const id = crypto.randomUUID();
-      extractedItemsMap.set(id, {
-        id: id,
-        numero: matchT1[1].trim(),
-        nome: possibleName,
-        fase: rawFase.trim().toUpperCase(),
-        grau: rawGrau,
+      extractedItemsMap.set(chunk.num, {
+        id: crypto.randomUUID(),
+        numero: chunk.num,
+        nome: name,
+        fase: faseItem,
+        grau: grauItem,
         comentario: ''
       });
     }
-    
-    // =========================================================================
-    // FIM DA LEITURA DA TABELA 1 - INÍCIO DOS ITENS AFETIVOS
-    // =========================================================================
 
+    // 4. ITENS AFETIVOS
     let affectiveAreaText = '';
     if (idxAfetivos !== -1) {
-      const affEndIndex = idxComentarios !== -1 ? idxComentarios : text.length;
-      affectiveAreaText = text.substring(idxAfetivos, affEndIndex);
-    }
-
-    if (affectiveAreaText) {
-      let cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
-      cleanAffectiveText = cleanAffectiveText
-          .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-          .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-          .replace(/--- PAGE \d+ ---/gi, '')
-          .replace(/\b\d+\s+de\s+\d+\b/gi, '');
-
-      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
+      const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
+      affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+      
+      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2})/gi;
       let matchT2;
       
-      while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
+      while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
         let itemName = matchT2[1].trim();
         let itemGrau = matchT2[2].toUpperCase();
 
         const itemGrauNorm = itemGrau.replace(/\s+/g, '');
-        if (itemGrauNorm === '--' || itemGrauNorm === 'N/O' || itemGrauNorm === 'N/A' || itemGrauNorm === 'NR' || itemGrauNorm === 'NÃOOBSERVADO') {
+        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(itemGrauNorm)) {
           itemGrau = '';
         }
 
@@ -375,9 +298,8 @@ export default function App() {
           itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
 
           if(itemName){
-            const id = crypto.randomUUID();
-            extractedItemsMap.set(id, {
-              id: id,
+            extractedItemsMap.set(itemName, {
+              id: crypto.randomUUID(),
               numero: '',
               nome: itemName,
               fase: '--',
@@ -391,23 +313,14 @@ export default function App() {
 
     let finalItems = Array.from(extractedItemsMap.values());
 
-    let commentsText = '';
+    // 5. COMENTÁRIOS
     if (idxComentarios !== -1) {
-        commentsText = text.substring(idxComentarios);
-    }
-
-    if (commentsText) {
-      let cleanComments = commentsText.replace(/["\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-      cleanComments = cleanComments
-        .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-        .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-        .replace(/--- PAGE \d+ ---/gi, '')
-        .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-        .replace(/Comentários:/gi, '');
+      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
       const allCommentMatches: any[] = [];
 
-      const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:(RC|RM|RO|PR|--|)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
+      // Comentários das Tabelas de Manobras
+      const commentHeaderRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:(RC\b|RM\b|RO\b|PR\b|--)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
       let matchC;
       while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
         let rawFaseC = matchC[3] ? matchC[3].trim() : '--'; 
@@ -419,7 +332,7 @@ export default function App() {
         }
 
         const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
-        if (rawFaseC === 'PR' || rawGrauCNorm === '--' || rawGrauCNorm === 'N/O' || rawGrauCNorm === 'N/A' || rawGrauCNorm === 'NR' || rawGrauCNorm === 'AN/' || rawGrauCNorm === 'NÃOOBSERVADO') {
+        if (rawFaseC === 'PR' || ['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(rawGrauCNorm)) {
           rawGrauC = '';
         }
 
@@ -427,19 +340,19 @@ export default function App() {
           index: matchC.index,
           length: matchC[0].length,
           numero: matchC[1].trim(),
-          nome: matchC[2].replace(/\n/g, ' ').trim(),
           fase: rawFaseC,
           grau: rawGrauC
         });
       }
 
+      // Comentários Afetivos
       const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\/\u0300-\u036f]+?)\s*\(\s*(?:\/\s*)?(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
       let matchAC;
       while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
         let rawGrauAC = matchAC[3] ? matchAC[3].trim().toUpperCase() : '';
         
         const rawGrauACNorm = rawGrauAC.replace(/\s+/g, '');
-        if (rawGrauACNorm === '--' || rawGrauACNorm === 'N/O' || rawGrauACNorm === 'N/A' || rawGrauACNorm === 'NR' || rawGrauACNorm === 'NÃOOBSERVADO') {
+        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(rawGrauACNorm)) {
           rawGrauAC = '';
         }
 
@@ -447,7 +360,6 @@ export default function App() {
           index: matchAC.index,
           length: matchAC[0].length,
           numero: matchAC[1].trim(),
-          nome: matchAC[2].replace(/\n/g, ' ').trim(),
           fase: '--',
           grau: rawGrauAC
         });
@@ -466,41 +378,17 @@ export default function App() {
           const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
           const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
           
-          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) {
-            endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
-          } else if (assDigitalIndex !== -1) {
-            endIndex = assDigitalIndex;
-          } else if (recomendacoesIndex !== -1) {
-            endIndex = recomendacoesIndex;
-          } else {
-            endIndex = cleanComments.length;
-          }
+          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
+          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
+          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
+          else endIndex = cleanComments.length;
         }
 
         let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
 
         let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
-
-        if (!foundItem) {
-          foundItem = finalItems.find((item: any) => {
-            const n1 = item.nome.toLowerCase().trim();
-            const n2 = currentMatch.nome.toLowerCase().trim();
-            return n1.includes(n2) || n2.includes(n1);
-          });
-        }
-
         if (foundItem) {
           foundItem.comentario = comentarioText;
-          if (!foundItem.numero) foundItem.numero = currentMatch.numero;
-        } else {
-          finalItems.push({
-            id: crypto.randomUUID(),
-            numero: currentMatch.numero,
-            nome: currentMatch.nome,
-            fase: currentMatch.fase,
-            grau: currentMatch.grau,
-            comentario: comentarioText
-          });
         }
       }
     }
@@ -620,7 +508,7 @@ export default function App() {
       faseItem: item.fase,
       grau: item.grau,
       comentario: item.comentario,
-      tipoMissao: meta.tipoMissao // Adicionado na última coluna do Payload
+      tipoMissao: meta.tipoMissao 
     }));
   };
 
@@ -663,7 +551,6 @@ export default function App() {
        return;
     }
 
-    // Aciona o Modal de "Enviando"
     setModalState('sending');
     setShowModal(true);
 
@@ -704,7 +591,6 @@ export default function App() {
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
       
-      {/* POP-UP (MODAL) DE ENVIO PROFISSIONAL */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4 transition-all">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center transform scale-100 animate-in fade-in zoom-in duration-200">
@@ -759,7 +645,6 @@ export default function App() {
         </div>
       )}
 
-      {/* CONTEÚDO NORMAL DA PÁGINA */}
       <div className={`max-w-6xl mx-auto transition-opacity ${showModal ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
         
         <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
@@ -820,7 +705,6 @@ export default function App() {
                 </span>
               </div>
               
-              {/* LAYOUT ALINHADO: Exatamente 12 itens formando 2 fileiras preenchidas perfeitamente */}
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
                 <MetaSelect 
                   label="Esquadrilha *" 
