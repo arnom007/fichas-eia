@@ -124,7 +124,6 @@ export default function App() {
       return newMeta;
     });
   };
-
   const processTextData = (text: string) => {
     // 1. LIMPEZA GLOBAL
     let globalCleanText = text
@@ -430,7 +429,7 @@ export default function App() {
       setErrorMsg('Não foi possível extrair os itens. Verifique o arquivo enviado.');
       setStatus('idle');
     }
-  }
+  };
     let finalItems = Array.from(extractedItemsMap.values());
 
     // 5. COMENTÁRIOS
