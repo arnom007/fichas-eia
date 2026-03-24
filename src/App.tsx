@@ -131,75 +131,117 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    const headerEndIdx = text.search(/1\s*-|Itens Afetivos|Comentários:/i);
-    const headerText = headerEndIdx !== -1 ? text.substring(0, headerEndIdx) : text;
-    const cleanHeader = headerText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
-    
-    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
+    // 1. LIMPEZA GLOBAL DE RODAPÉS E CABEÇALHOS PERDIDOS
+    // Removemos os textos de cabeçalho/rodapé antes de qualquer extração para evitar falsos positivos
+    let cleanText = text
+      .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
+      .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
+      .replace(/--- PAGE \d+ ---/gi, '')
+      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
+      .replace(/COMANDO DA AERONÁUTICA/gi, '')
+      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+      .replace(/POUSOS:\s*\d*/gi, '')
+      .replace(/TEV:\s*\d{2}:\d{2}/gi, '');
+
+    // 2. EXTRAÇÃO DE METADADOS
+    const headerEndIdx = cleanText.search(/1\s*-|Itens Afetivos|Comentários:/i);
+    const headerText = headerEndIdx !== -1 ? cleanText.substring(0, headerEndIdx) : cleanText;
+    const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+
+    const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
     const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
 
-    // Auto-deteta o Tipo de Missão pelas palavras-chave no cabeçalho
     let tipoMissaoDetectado = 'Normal';
-    if (cleanHeader.match(/\bExtra\b/i)) {
-      tipoMissaoDetectado = 'Extra';
-    } else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) {
-      tipoMissaoDetectado = 'Revisão';
-    } else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMAT\b/i)) {
+    if (singleLineHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
+    else if (singleLineHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
+    else if (singleLineHeader.match(/\bAbortiva\b/i) || singleLineHeader.match(/\bVMET\b/i) || singleLineHeader.match(/\bVMAT\b/i)) {
       tipoMissaoDetectado = 'Abortiva';
     }
 
-    let finalGrauMissao = grauMissao;
-    if (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') {
-      finalGrauMissao = '';
-    }
-
-    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
+    const matchMissao = singleLineHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
-    const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const matchData = singleLineHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
     const data = matchData ? matchData[1] : '';
 
-    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
-    let hdep = '';
-    let tev = '';
+    const times = Array.from(singleLineHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
+    let hdep = '', tev = '';
     if (times.length >= 2) {
       hdep = times[0][1];
       tev = times[times.length - 1][1]; 
     } else if (times.length === 1) {
-      if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1];
-      else hdep = times[0][1];
+      hdep = times[0][1];
     }
 
-    // EXTRAÇÃO INTELIGENTE DA FASE
     let fase = '';
-    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    const matchFase = singleLineHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
     if (matchFase) {
-      fase = matchFase[1].replace(/["\n\r]/g, '').trim().toUpperCase();
-      fase = fase.replace(/^[-:]+|[-:]+$/g, '').trim(); 
+      fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
     }
 
-    const matchAeronave = cleanHeader.match(/AERONAVE[^\d]*(\d{4})\b/i);
-    let aeronave = matchAeronave ? matchAeronave[1] : '';
-    if (!aeronave) {
-      const fallbackAero = cleanHeader.match(/\b(13\d{2}|14\d{2})\b/);
-      if (fallbackAero) aeronave = fallbackAero[1];
+    const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
+    const aeronave = matchAeronave ? matchAeronave[1] : '';
+
+    const parecerMatch = cleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=Ciente|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
+    let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+
+    setMeta(prev => ({
+      ...prev,
+      fase, aeronave, data, missao,
+      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
+      tipoMissao: tipoMissaoDetectado, hdep, tev, parecer: parecerStr
+    }));
+
+    // 3. EXTRAÇÃO DE COMENTÁRIOS E ITENS
+    const extractedItemsMap = new Map();
+    const idxComentarios = cleanText.search(/Comentários:/i);
+    
+    if (idxComentarios !== -1) {
+      const commentsText = cleanText.substring(idxComentarios + 12); // Pula a palavra "Comentários:"
+      
+      // RegEx aprimorado: Busca números de itens seguidos de traço, permitindo quebras de linha até os parênteses da nota
+      const commentBlockRegex = /(?:^|\n)\s*(\d{1,2})\s*-\s*([\s\S]*?)\s*\(\s*(?:([A-Z]{2}|--)?\s*\/\s*)?([A-Za-z0-9\-\/ \u0300-\u036f]+)\s*\)\s*:\s*([\s\S]*?)(?=(?:\n\s*\d{1,2}\s*-|\n\s*Ass\. Digital|\n\s*Recomendações\/Parecer:|$))/gi;
+      
+      let match;
+      while ((match = commentBlockRegex.exec(commentsText)) !== null) {
+        const numero = match[1].trim();
+        const nome = match[2].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        let faseItem = match[3] ? match[3].trim().toUpperCase() : '--';
+        let grauItem = match[4] ? match[4].replace(/\s+/g, '').toUpperCase() : '';
+        let comentario = match[5] ? match[5].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+
+        // Tratamento especial para PR e itens sem nota
+        if (grauItem === 'PR' || faseItem === 'PR') {
+          faseItem = 'PR';
+          grauItem = '';
+        } else if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grauItem)) {
+          grauItem = '';
+        }
+
+        extractedItemsMap.set(numero, {
+          id: crypto.randomUUID(),
+          numero,
+          nome,
+          fase: faseItem,
+          grau: grauItem,
+          comentario
+        });
+      }
     }
 
-    const matchPousos = cleanHeader.match(/POUSOS[^\d]*(\d{1,2})\b/i);
-    const pousos = matchPousos ? matchPousos[1] : '';
+    // Ordenar e atualizar o estado
+    const finalItems = Array.from(extractedItemsMap.values()).sort((a, b) => parseInt(a.numero) - parseInt(b.numero));
 
-    const parecerMatch = text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=Ciente|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
-    let parecerStr = '';
-    if (parecerMatch) {
-      parecerStr = parecerMatch[1]
-        .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-        .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-        .replace(/--- PAGE \d+ ---/gi, '')
-        .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-        .replace(/\n/g, ' ')
-        .replace(/\s{2,}/g, ' ')
-        .trim();
+    if (finalItems.length > 0) {
+      setItems(finalItems);
+      setStatus('reviewing');
+      setErrorMsg('');
+    } else {
+      setErrorMsg('A leitura automática não encontrou itens comentados. Verifique se o formato do PDF está legível ou adicione os itens manualmente.');
+      setStatus('idle');
     }
+  }
 
     setMeta(prev => ({
       esquadrilha: prev.esquadrilha, 
