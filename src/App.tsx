@@ -170,12 +170,12 @@ export default function App() {
       else hdep = times[0][1];
     }
 
-    // EXTRAÇÃO INTELIGENTE E UNIVERSAL DA FASE (PIMO 2026 Ready)
+    // EXTRAÇÃO INTELIGENTE DA FASE
     let fase = '';
     const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
     if (matchFase) {
       fase = matchFase[1].replace(/["\n\r]/g, '').trim().toUpperCase();
-      fase = fase.replace(/^[-:]+|[-:]+$/g, '').trim(); // Remove hífens ou dois pontos excedentes
+      fase = fase.replace(/^[-:]+|[-:]+$/g, '').trim(); 
     }
 
     const matchAeronave = cleanHeader.match(/AERONAVE[^\d]*(\d{4})\b/i);
@@ -218,13 +218,13 @@ export default function App() {
     }));
 
     // =========================================================================
-    // O RETORNO DO MODELO ESTÁVEL: Isolamento de Tabela e Regex de Alta Precisão
+    // O RETORNO DO MODELO ESTÁVEL DE ALTA PRECISÃO (REGEX REFINADO)
     // =========================================================================
     
     const idxAfetivos = text.search(/Itens Afetivos/i);
     const idxComentarios = text.search(/Comentários:/i);
 
-    // Encontra onde começa a tabela real (Logo após o TEV) para não ler "01 DATA"
+    // Encontra onde começa a tabela real
     const headerEndMatch = text.match(/TEV:\s*\d{2}:\d{2}/i);
     let tableStartIndex = 0;
     if (headerEndMatch) {
@@ -239,28 +239,30 @@ export default function App() {
     let tableText = text.substring(tableStartIndex, tableEndIndex);
     let cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    // REMOVE OS RODAPÉS ASSASSINOS QUE CONFUNDIAM O ROBÔ
+    // 🔴 A TESOURA DE SEGURANÇA 🔴
+    // Removemos proativamente todo o lixo do rodapé ANTES do regex tentar ler
     cleanTableText = cleanTableText
         .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
         .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
         .replace(/--- PAGE \d+ ---/gi, '')
         .replace(/\b\d+\s+de\s+\d+\b/gi, '')
         .replace(/COMANDO DA AERONÁUTICA/gi, '')
-        .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '');
+        .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+        .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+        .replace(/\s{2,}/g, ' ');
 
     const extractedItemsMap = new Map();
 
-    // REGEX ESTÁVEL (AGORA ACEITANDO ITENS SEM FASE PARA O PIMO DE INSTRUMENTOS)
-    // Grupo 1: Número
-    // Grupo 2: Nome da Manobra (agora não avança se encontrar a nota)
-    // Grupo 3: PR 
-    // Grupo 4: Fase (RC, RM, RO, --) - Opcional
-    // Grupo 5: Grau (1-6, N/O, N/A, NR)
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s|$|\b\d{1,2})/gi;
+    // 🟢 O REGEX DE OURO TREINADO PARA "PRÉ-SOLO" E "INSTRUMENTOS (VI)" 🟢
+    // Agora o campo da Fase (RC, RM, RO) é totalmente opcional (graças ao (?:...)?). 
+    // E usamos um Lookahead (?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$)) para ele só parar quando vir a próxima manobra,
+    // garantindo que ele capture nomes grandes como "Curva de grande inclinação".
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))(?=\s*(?:\b\d{1,2}\s*-?\s*[A-Za-zÀ-ÿ]|$))/gi;
     
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
       const isPR = !!matchT1[3];
+      // Se tiver fase, pega ela. Se não tiver (como em Instrumentos), coloca '--'
       const rawFase = isPR ? 'PR' : (matchT1[4] || '--');
       let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
 
@@ -269,7 +271,7 @@ export default function App() {
         rawGrau = '';
       }
 
-      // Proteção contra leitura de lixos ("DATA:", "H. DEP:", etc)
+      // Proteção de Segurança: Ignora lixos perdidos
       const possibleName = matchT1[2].trim();
       if (possibleName.toUpperCase().startsWith("DATA") || possibleName.toUpperCase().startsWith("H. DEP") || possibleName.toUpperCase().startsWith("AERO")) {
         continue;
