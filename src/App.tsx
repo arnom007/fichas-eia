@@ -148,13 +148,12 @@ export default function App() {
       tipoMissaoDetectado = 'Abortiva';
     }
 
-    // Se for Abortiva ou Extra, já garantimos que o grau da missão fica vazio
     let finalGrauMissao = grauMissao;
     if (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') {
       finalGrauMissao = '';
     }
 
-    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+)?[A-Z]{2,4}-\d{2})\b/i);
+    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
     const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
@@ -171,8 +170,13 @@ export default function App() {
       else hdep = times[0][1];
     }
 
-    const matchFase = cleanHeader.match(/(PR[ÉE]-SOLO|INSTRUMENTOS|FORMATURA\s*\d*\s*AERONAVES|FORMATURA|NAVEGA[ÇC][ÃA]O|B[ÁA]SICA|AVAN[ÇC]ADA|PADR[ÃA]O)/i);
-    const fase = matchFase ? matchFase[1].trim().toUpperCase() : '';
+    // EXTRAÇÃO INTELIGENTE E UNIVERSAL DA FASE (PIMO 2026 Ready)
+    let fase = '';
+    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    if (matchFase) {
+      fase = matchFase[1].replace(/["\n\r]/g, '').trim().toUpperCase();
+      fase = fase.replace(/^[-:]+|[-:]+$/g, '').trim(); // Remove hífens ou dois pontos excedentes
+    }
 
     const matchAeronave = cleanHeader.match(/AERONAVE[^\d]*(\d{4})\b/i);
     let aeronave = matchAeronave ? matchAeronave[1] : '';
@@ -241,11 +245,13 @@ export default function App() {
     const cleanTableText = tableText.replace(/["\n\r,]/g, ' ').replace(/\s{2,}/g, ' ');
     const extractedItemsMap = new Map();
 
-    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ\s\-]{3,45}?)\s+(?:(PR)|(RC|RM|RO|--)\s+([1-6]|N\/O|N\/A|NR|A\s*N\/|--))/gi;
+    // REGEX UNIVERSAL: Fase é opcional! Lida perfeitamente com missões de Instrumentos ("1- Voo sob Capota 5")
+    const table1Regex = /\b(\d{1,2})\s*-?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{3,80}?)\s+(?:(\bPR\b)|(?:(\bRC\b|\bRM\b|\bRO\b|--)\s+)?([1-6]\b|N\/O\b|N\/A\b|NR\b|A\s*N\/|--))/gi;
     let matchT1;
     while ((matchT1 = table1Regex.exec(cleanTableText)) !== null) {
       const isPR = !!matchT1[3];
-      const rawFase = isPR ? 'PR' : matchT1[4];
+      // Se não tiver fase (ex: capota), assumimos '--'
+      const rawFase = isPR ? 'PR' : (matchT1[4] || '--');
       let rawGrau = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
 
       const rawGrauNorm = rawGrau.replace(/\s+/g, ''); 
@@ -274,7 +280,7 @@ export default function App() {
 
     const cleanAffectiveText = affectiveAreaText.replace(/["\r\n]/g, ' ').replace(/\s{2,}/g, ' ');
 
-    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ\s\-]{4,50}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
+    const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
     let matchT2;
     
     while ((matchT2 = affectiveRegex.exec(cleanAffectiveText)) !== null) {
@@ -315,11 +321,18 @@ export default function App() {
 
     const allCommentMatches: any[] = [];
 
-    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*(RC|RM|RO|PR|--|)\s*\/\s*([A-Za-z0-9À-ÿ\-\/ ]+)\s*\)\s*:?/gi;
+    // REGEX DE COMENTÁRIOS UNIVERSAL: Aceita comentários sem barra de fase, como (5) ou ( / 5)
+    const commentHeaderRegex = /(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\u0300-\u036f]+?)\s*\(\s*(?:(RC|RM|RO|PR|--|)\s*\/\s*)?([A-Za-z0-9À-ÿ\-\/ \u0300-\u036f]+)\s*\)\s*:?/gi;
     let matchC;
     while ((matchC = commentHeaderRegex.exec(cleanComments)) !== null) {
-      let rawFaseC = matchC[3].trim();
-      let rawGrauC = matchC[4].trim().toUpperCase();
+      let rawFaseC = matchC[3] ? matchC[3].trim() : '--'; // Se a fase vier em branco, força o '--'
+      let rawGrauC = matchC[4] ? matchC[4].trim().toUpperCase() : '';
+
+      // Proteção para o PR que vem solto dentro dos parênteses (PR)
+      if (rawGrauC === 'PR') {
+        rawFaseC = 'PR';
+        rawGrauC = '';
+      }
 
       const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
       if (rawFaseC === 'PR' || rawGrauCNorm === '--' || rawGrauCNorm === 'N/O' || rawGrauCNorm === 'N/A' || rawGrauCNorm === 'NR' || rawGrauCNorm === 'AN/' || rawGrauCNorm === 'NÃOOBSERVADO') {
@@ -336,10 +349,10 @@ export default function App() {
       });
     }
 
-    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-]+?)\s*\(\s*\/\s*(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
+    const affectiveCommentRegex = /\b(\d{1,2})\s*-\s*([A-Za-zÀ-ÿ0-9\s.,\-\u0300-\u036f]+?)\s*\(\s*(?:\/\s*)?(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\s*\)\s*:?/gi;
     let matchAC;
     while ((matchAC = affectiveCommentRegex.exec(cleanComments)) !== null) {
-      let rawGrauAC = matchAC[3].trim().toUpperCase();
+      let rawGrauAC = matchAC[3] ? matchAC[3].trim().toUpperCase() : '';
       
       const rawGrauACNorm = rawGrauAC.replace(/\s+/g, '');
       if (rawGrauACNorm === '--' || rawGrauACNorm === 'N/O' || rawGrauACNorm === 'N/A' || rawGrauACNorm === 'NR' || rawGrauACNorm === 'NÃOOBSERVADO') {
