@@ -137,10 +137,30 @@ export default function App() {
       .replace(/T-27 BÁSICO 20\d{2}/gi, '')
       .replace(/PROT[\s.:]*\d+/gi, ''); 
 
+    // PRE-PROCESSAMENTO DA COLUNA: 
+    // Transforma o token __COL__ gerado pela leitura espacial em \n (apenas na tabela de voo)
+    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
+    const idxComentarios = globalCleanText.search(/Comentários:/i);
+
+    let tablePart = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length);
+    tablePart = tablePart.replace(/ __COL__ /g, '\n');
+
+    let affectivePart = '';
+    if (idxAfetivos !== -1) {
+       affectivePart = globalCleanText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : globalCleanText.length);
+       affectivePart = affectivePart.replace(/ __COL__ /g, ' '); // Mantém na mesma linha
+    }
+
+    let commentsPart = '';
+    if (idxComentarios !== -1) {
+       commentsPart = globalCleanText.substring(idxComentarios);
+       commentsPart = commentsPart.replace(/ __COL__ /g, ' '); // Mantém na mesma linha
+    }
+
+    globalCleanText = tablePart + '\n' + affectivePart + '\n' + commentsPart;
+
     // 2. EXTRAÇÃO DE METADADOS
-    const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
-    const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
-    const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    const singleLineHeader = globalCleanText.substring(0, 1000).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
     const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
     const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
@@ -170,9 +190,7 @@ export default function App() {
 
     let fase = '';
     const matchFase = singleLineHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
-    if (matchFase) {
-      fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
-    }
+    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
 
     const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
     const aeronave = matchAeronave ? matchAeronave[1] : '';
@@ -194,218 +212,119 @@ export default function App() {
       parecer: parecerStr
     }));
 
-    // 3. EXTRAÇÃO DAS TABELAS COM TOKENIZAÇÃO
+    // 3. PARSING ESTRUTURADO (Linha por Linha - Seu Algoritmo de Mestre!)
     const extractedItemsMap = new Map();
+    const lines = globalCleanText.split('\n');
 
-    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
-    const idxComentarios = globalCleanText.search(/Comentários:/i);
+    let isAffectiveArea = false;
+    let isCommentsArea = false;
+    let accumulatedComments = '';
 
-    let tableStartIndex = 0;
-    const firstItemRegex = /(?:^|\n|\r|\s)\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i;
-    const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
-    if (firstItemMatch) {
-      tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
-    }
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
+      if (!line) continue;
 
-    let tableEndIndex = globalCleanText.length;
-    if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
-    else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
+      if (line.match(/Itens Afetivos/i)) { isAffectiveArea = true; continue; }
+      if (line.match(/Comentários:/i)) { isCommentsArea = true; isAffectiveArea = false; continue; }
 
-    let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      if (isCommentsArea) {
+        accumulatedComments += line + ' \n ';
+        continue;
+      }
 
-    // Passo A: Isolar os números das manobras substituindo-os por um Token protegido
-    let maskedTableText = cleanTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*/g, ' __ITEM_$1__ ');
-    maskedTableText = maskedTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])(?=[A-Za-zÀ-ÿ])/g, ' __ITEM_$1__ ');
-
-    // Passo B: Fatiar a string sempre que encontrar uma Fase/Grau
-    const pgRegex = /(?:\s+|^)(PR|(?:RC|RM|RO|--)\s*(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)|[1-6]|N\/O|N\/A|NR|A\s*N\/)(?=\s|$)/i;
-    const parts = maskedTableText.split(pgRegex);
-
-    for (let i = 0; i < parts.length - 1; i += 2) {
-      let rawText = parts[i].trim();
-      let rawPG = parts[i + 1].trim();
-      
-      if (!rawText && !rawPG) continue;
-
-      const numMatches = Array.from(rawText.matchAll(/__ITEM_(\d{1,2})__/g));
-      
-      let faseItem = '--';
-      let grauItem = '';
-      const pgUpper = rawPG.toUpperCase();
-      
-      if (pgUpper === 'PR') {
-         faseItem = 'PR';
-      } else if (pgUpper.includes(' ')) {
-         const spl = pgUpper.split(/\s+/);
-         faseItem = spl[0];
-         grauItem = spl[1];
+      if (isAffectiveArea) {
+        const affectiveLineRegex = /^([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)$/i;
+        const affMatch = line.match(affectiveLineRegex);
+        if (affMatch) {
+          const nomeAff = affMatch[1].trim();
+          const grauAff = affMatch[2].replace(/\s+/g, '').toUpperCase();
+          extractedItemsMap.set(nomeAff, { id: crypto.randomUUID(), numero: '', nome: nomeAff, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(grauAff) ? '' : grauAff, comentario: '' });
+        }
       } else {
-         grauItem = pgUpper;
-      }
-
-      const grauNorm = grauItem.replace(/\s+/g, '');
-      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
-        grauItem = '';
-      }
-
-      // Passo C: Associar os números encontrados à nota extraída
-      if (numMatches.length > 0) {
-        const pieces = rawText.split(/__ITEM_\d{1,2}__/);
+        // Leitura limpa da Tabela 
+        const itemLineRegex = /^(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(.+?)\s*(?:[\(\[]?(PR|(?:RC|RM|RO|--)(?:[\s/\-]*)(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)?|[1-6]|N\/O|N\/A|NR|A\s*N\/)[\)\]]?)?$/i;
+        const matchItem = line.match(itemLineRegex);
         
-        for (let j = 0; j < numMatches.length; j++) {
-            const num = numMatches[j][1];
-            
-            let name = pieces[j+1] ? pieces[j+1].trim() : '';
-            if (!name && j === 0) name = pieces[0].trim();
-            
-            // Apenas o último item do bloco recebe a nota lida
-            let finalFase = '--';
-            let finalGrau = '';
-            if (j === numMatches.length - 1) {
-                finalFase = faseItem;
-                finalGrau = grauItem;
+        if (matchItem) {
+          const num = matchItem[1].trim();
+          let name = matchItem[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+          let rawPG = matchItem[3] ? matchItem[3].trim().toUpperCase() : '';
+          
+          let faseItem = '--';
+          let grauItem = '';
+
+          if (rawPG === 'PR') {
+            faseItem = 'PR';
+          } else if (/^(RC|RM|RO|--)$/.test(rawPG)) {
+            faseItem = rawPG;
+          } else if (/^([1-6]|N\/O|N\/A|NR|A\s*N\/|--)$/.test(rawPG)) {
+            grauItem = rawPG.replace(/\s+/g, '');
+          } else {
+            const matchPhase = rawPG.match(/^(RC|RM|RO|--)(?:[\s/\-]*)(.*)$/);
+            if (matchPhase) {
+              faseItem = matchPhase[1];
+              grauItem = matchPhase[2].replace(/\s+/g, '');
             }
-
-            extractedItemsMap.set(num, {
-              id: crypto.randomUUID(),
-              numero: num,
-              nome: name,
-              fase: finalFase,
-              grau: finalGrau,
-              comentario: ''
-            });
-        }
-      }
-    }
-
-    // 4. ITENS AFETIVOS
-    let affectiveAreaText = '';
-    if (idxAfetivos !== -1) {
-      const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
-      affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-      
-      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2}|\b(?:Comentários|Debriefing|Preparo|Raciocínio|Adaptação|Progresso|Reação|Interesse|Iniciativa|Aplicação|Conhecimento|Briefing|Mentalidade))/gi;
-      let matchT2;
-      
-      while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
-        let itemName = matchT2[1].trim();
-        let itemGrau = matchT2[2].toUpperCase();
-
-        const itemGrauNorm = itemGrau.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(itemGrauNorm)) {
-          itemGrau = '';
-        }
-
-        if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
-          const grauTextToRemove = matchT2[2].toUpperCase();
-          itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
-
-          if(itemName){
-            extractedItemsMap.set(itemName, {
-              id: crypto.randomUUID(),
-              numero: '', 
-              nome: itemName,
-              fase: '--',
-              grau: itemGrau, 
-              comentario: ''
-            });
           }
+
+          if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauItem)) grauItem = '';
+
+          extractedItemsMap.set(num, { id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
         }
       }
     }
 
     let finalItems = Array.from(extractedItemsMap.values());
 
-    // 5. COMENTÁRIOS
-    if (idxComentarios !== -1) {
-      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-
+    // 4. PARSING DE COMENTÁRIOS (A prioridade do Título sobre o Número)
+    if (accumulatedComments) {
       const allCommentMatches: any[] = [];
-
-      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
+      const commentRegex = /(?:^|\s|\n)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
       let matchC;
       
-      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
-        const num = matchC[1].trim();
-        const nomeC = matchC[2].trim(); 
-        let rawFaseC = '--';
-        let rawGrauC = '';
-        const insideParens = matchC[3].toUpperCase();
-
-        if (insideParens.includes('/')) {
-           const parts = insideParens.split('/');
-           rawFaseC = parts[0].trim() || '--';
-           rawGrauC = parts[1].trim();
-        } else {
-           const val = insideParens.trim();
-           if (val === 'PR') {
-              rawFaseC = 'PR';
-           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
-              rawGrauC = val;
-           } else {
-              rawFaseC = val;
-           }
+      while ((matchC = commentRegex.exec(accumulatedComments)) !== null) {
+        let grauC = '';
+        if (matchC[3]) {
+          const inside = matchC[3].toUpperCase();
+          if (inside.includes('/')) grauC = inside.split('/')[1].trim();
+          else if (/^[1-6]$/.test(inside) || ['NORMAL', 'DESTACOU-SE', 'PRECISA MELHORAR', 'DEFICIENTE', 'NÃO OBSERVADO', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR', 'PR'].includes(inside)) grauC = inside;
         }
 
-        if (rawFaseC === 'PR') rawGrauC = '';
-        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
-          rawGrauC = '';
-        }
-
-        allCommentMatches.push({
-          index: matchC.index,
-          length: matchC[0].length,
-          numero: num,
-          nome: nomeC, 
-          fase: rawFaseC,
-          grau: rawGrauC
+        allCommentMatches.push({ 
+          index: matchC.index, 
+          length: matchC[0].length, 
+          numero: matchC[1].trim(), 
+          nome: matchC[2].trim(), 
+          grau: ['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(grauC.replace(/\s+/g, '')) ? '' : grauC 
         });
       }
 
       allCommentMatches.sort((a, b) => a.index - b.index);
 
       for (let i = 0; i < allCommentMatches.length; i++) {
-        const currentMatch = allCommentMatches[i];
-        const startIndex = currentMatch.index + currentMatch.length;
-        let endIndex;
-
-        if (i + 1 < allCommentMatches.length) {
-          endIndex = allCommentMatches[i + 1].index;
-        } else {
-          const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
-          const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
-          
-          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
-          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
-          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
-          else endIndex = cleanComments.length;
-        }
-
-        let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
-
-        let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
+        const cMatch = allCommentMatches[i];
+        const startIndex = cMatch.index + cMatch.length;
+        const endIndex = (i + 1 < allCommentMatches.length) ? allCommentMatches[i + 1].index : accumulatedComments.length;
         
-        if (!foundItem) {
-          foundItem = finalItems.find((item: any) => {
-            const n1 = item.nome.toLowerCase().trim();
-            const n2 = currentMatch.nome.toLowerCase().trim();
-            return n1.includes(n2) || n2.includes(n1);
-          });
-        }
+        let rawComment = accumulatedComments.substring(startIndex, endIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+        // Aplicando a recomendação do PDF: Priorizar o NOME do item
+        let foundItem = finalItems.find((item: any) => {
+          const n1 = item.nome.toLowerCase();
+          const n2 = cMatch.nome.toLowerCase();
+          return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
+        });
+
+        // Fallback para o número se o nome não bater
+        if (!foundItem) foundItem = finalItems.find((item: any) => item.numero === cMatch.numero);
 
         if (foundItem) {
-          foundItem.comentario = comentarioText;
-          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
+          foundItem.comentario = rawComment;
+          // Safety Net (Rede de Segurança)! Salva itens que perderam nota na tabela
+          if (!foundItem.grau && cMatch.grau && cMatch.grau !== 'PR') foundItem.grau = cMatch.grau;
+          if (cMatch.grau === 'PR') foundItem.fase = 'PR';
         } else {
-          finalItems.push({
-            id: crypto.randomUUID(),
-            numero: currentMatch.numero,
-            nome: currentMatch.nome,
-            fase: currentMatch.fase,
-            grau: currentMatch.grau,
-            comentario: comentarioText
-          });
+          finalItems.push({ id: crypto.randomUUID(), numero: cMatch.numero, nome: cMatch.nome, fase: cMatch.grau === 'PR' ? 'PR' : '--', grau: cMatch.grau === 'PR' ? '' : cMatch.grau, comentario: rawComment });
         }
       }
     }
@@ -447,35 +366,59 @@ export default function App() {
       try {
         const arrayBuffer = await file.arrayBuffer();
         const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullText = '';
+        let finalDocumentText = '';
         
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-          
-          const items = textContent.items;
-          items.sort((a: any, b: any) => {
+          const items = textContent.items as any[];
+
+          // 1. Ordenação Espacial (A sua extração aprimorada)
+          items.sort((a, b) => {
             if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
               return b.transform[5] - a.transform[5];
             }
-            return a.transform[4] - b.transform[4];
+            return a.transform[4] - b.transform[4]; 
           });
 
-          let lastY = null;
-          let pageText = '';
-          for (let item of items) {
-            if (lastY !== null && Math.abs(lastY - item.transform[5]) > 5) {
-              pageText += '\n';
-            } else if (lastY !== null) {
-              pageText += ' '; 
+          const lines: any[][] = [];
+          let currentLine: any[] = [];
+          let currentY = items.length > 0 ? items[0].transform[5] : 0;
+
+          for (const item of items) {
+            if (Math.abs(item.transform[5] - currentY) > 5) {
+              lines.push(currentLine);
+              currentLine = [item];
+              currentY = item.transform[5];
+            } else {
+              currentLine.push(item);
             }
-            pageText += item.str.trim();
-            lastY = item.transform[5];
           }
-          pageText = pageText.replace(/ {2,}/g, ' ');
-          fullText += pageText + '\n\n';
+          if (currentLine.length > 0) lines.push(currentLine);
+
+          // 3. Quebra de Colunas com Token Seguro __COL__
+          for (const line of lines) {
+            line.sort((a, b) => a.transform[4] - b.transform[4]);
+            
+            let lineString = '';
+            for (let j = 0; j < line.length; j++) {
+              lineString += line[j].str;
+              if (j < line.length - 1) {
+                const currentRightEdge = line[j].transform[4] + (line[j].width || 0);
+                const nextLeftEdge = line[j + 1].transform[4];
+                const gap = nextLeftEdge - currentRightEdge;
+
+                if (gap > 40) {
+                  lineString += ' __COL__ '; 
+                } else {
+                  if (!lineString.endsWith(' ')) lineString += ' ';
+                }
+              }
+            }
+            finalDocumentText += lineString.trim() + '\n';
+          }
         }
-        processTextData(fullText);
+        processTextData(finalDocumentText);
       } catch (err) {
         console.error(err);
         setErrorMsg('Erro ao ler o arquivo PDF. Verifique se o arquivo não está corrompido.');
