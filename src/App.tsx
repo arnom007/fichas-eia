@@ -100,6 +100,322 @@ export default function App() {
     });
   };
 
+const processStructuredData = (rawItems: any[]) => {
+
+  const normalized = normalizeItems(rawItems);
+  const lines = buildLines(normalized);
+  const { left, right } = splitColumns(lines);
+
+  const items = extractItems(left);
+  const comments = extractComments(right);
+
+  const finalItems = mergeData(items, comments);
+
+  setItems(finalItems);
+  setStatus('reviewing');
+};
+
+  const normalizeItems = (items: any[]) => {
+  return items
+    .map(i => ({
+      text: i.text.trim(),
+      x: i.x,
+      y: Math.round(i.y / 4) * 4
+    }))
+    .filter(i => i.text.length > 0);
+};
+
+  const buildLines = (items: any[]) => {
+  const map = new Map<number, any[]>();
+
+  items.forEach(i => {
+    if (!map.has(i.y)) map.set(i.y, []);
+    map.get(i.y).push(i);
+  });
+
+  return Array.from(map.entries())
+    .sort((a, b) => b[0] - a[0])
+    .map(([_, line]) =>
+      line.sort((a, b) => a.x - b.x)
+    );
+};
+
+  const splitColumns = (lines: any[][]) => {
+  const LEFT_LIMIT = 300;
+
+  const left: string[] = [];
+  const right: string[] = [];
+
+  lines.forEach(line => {
+    const l = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
+    const r = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
+
+    if (l) left.push(l);
+    if (r) right.push(r);
+  });
+
+  return { left, right };
+};
+const extractItems = (lines: string[]) => {
+
+  const results: any[] = [];
+  let current: any = null;
+
+  const isNumero = (t: string) => /^\d{1,3}$/.test(t);
+  const isFase = (t: string) => ['PR','RC','RM','RO'].includes(t);
+  const isGrau = (t: string) => /^[1-6]$/.test(t);
+
+  lines.forEach(line => {
+
+    const tokens = line.split(/\s+/);
+
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+
+      if (isNumero(t)) {
+        if (current) results.push(current);
+
+        current = {
+          id: crypto.randomUUID(),
+          numero: t,
+          nome: '',
+          fase: '--',
+          grau: '',
+          comentario: ''
+        };
+
+        continue;
+      }
+
+      if (!current) continue;
+
+      if (isFase(t)) {
+        current.fase = t;
+        continue;
+      }
+
+      if (isGrau(t)) {
+        current.grau = t;
+        continue;
+      }
+
+      // texto normal
+      current.nome += (current.nome ? ' ' : '') + t;
+    }
+  });
+
+  if (current) results.push(current);
+
+  return results;
+};
+  
+  const extractComments = (lines: string[]) => {
+
+  const text = lines.join(' ');
+
+  const regex = /(.+?)\s*\(([^)]+)\):\s*(\d{1,3})\s*-\s*([\s\S]*?)(?=(.+?\([^)]*\):\s*\d+\s*-)|$)/gi;
+
+  const results: any[] = [];
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+
+    let nome = match[1].trim();
+    let numero = match[3];
+    let comentario = match[4].trim();
+
+    let fase = '--';
+    let grau = '';
+
+    const inside = match[2];
+
+    if (inside.includes('/')) {
+      const [f, g] = inside.split('/');
+      fase = f.trim();
+      grau = g.trim();
+    }
+
+    results.push({
+      numero,
+      nome,
+      fase,
+      grau,
+      comentario
+    });
+  }
+
+  return results;
+};
+
+  const similarity = (a: string, b: string) => {
+  a = a.toLowerCase();
+  b = b.toLowerCase();
+
+  if (a.includes(b) || b.includes(a)) return 1;
+
+  let score = 0;
+  const wordsA = a.split(' ');
+  const wordsB = b.split(' ');
+
+  wordsA.forEach(w => {
+    if (wordsB.includes(w)) score++;
+  });
+
+  return score / Math.max(wordsA.length, wordsB.length);
+};
+
+  const mergeData = (items: any[], comments: any[]) => {
+
+  return items.map(item => {
+
+    // 1. match perfeito por número
+    let match = comments.find(c => c.numero === item.numero);
+
+    // 2. fallback por nome (inteligente)
+    if (!match) {
+      match = comments
+        .map(c => ({ c, score: similarity(item.nome, c.nome) }))
+        .sort((a, b) => b.score - a.score)[0];
+
+      if (match && match.score > 0.5) match = match.c;
+      else match = null;
+    }
+
+    if (match) {
+      return {
+        ...item,
+        comentario: match.comentario || item.comentario,
+        fase: match.fase !== '--' ? match.fase : item.fase,
+        grau: match.grau || item.grau
+      };
+    }
+
+    return item;
+  })
+  .filter(i => i.nome.length > 3) // remove lixo
+  .sort((a, b) => Number(a.numero) - Number(b.numero));
+};
+  // 🔹 3. Separar colunas
+  const LEFT_LIMIT = 300;
+
+  const leftLines: string[] = [];
+  const rightLines: string[] = [];
+
+  lines.forEach(line => {
+    const left = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
+    const right = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
+
+    if (left.trim()) leftLines.push(left);
+    if (right.trim()) rightLines.push(right);
+  });
+
+  // 🔹 4. Parsear colunas separadamente
+  const leftItems = parseColumn(leftLines);
+  const rightItems = parseColumn(rightLines);
+
+  // 🔹 5. Juntar
+  let finalItems = [...leftItems, ...rightItems];
+
+  // 🔹 6. Deduplicar por número
+  const map = new Map();
+  finalItems.forEach(it => {
+    if (it.numero) map.set(it.numero, it);
+  });
+
+  finalItems = Array.from(map.values());
+
+  // 🔹 7. Ordenar
+  finalItems.sort((a, b) => Number(a.numero) - Number(b.numero));
+
+  // 🔹 8. Comentários (fonte MAIS confiável)
+  attachComments(finalItems, items);
+
+  setItems(finalItems);
+  setStatus('reviewing');
+};
+
+  const parseColumn = (lines: string[]) => {
+  const results: any[] = [];
+
+  let buffer = '';
+
+  for (let line of lines) {
+
+    // Corrigir número quebrado
+    line = line.replace(/(\d{1,3})\s*$/, '$1-');
+
+    buffer += ' ' + line;
+
+    // Detecta item completo
+    const regex = /(\d{1,3})\s*-\s*([^0-9]+?)(?:\s+(PR|RC|RM|RO))?\s*(\d|N\/A|N\/O|NR)?(?=\s+\d{1,3}\s*-|$)/gi;
+
+    let match;
+    while ((match = regex.exec(buffer)) !== null) {
+      const numero = match[1];
+      const nome = match[2].trim();
+      const fase = match[3] || '--';
+      let grau = match[4] || '';
+
+      if (['N/A', 'N/O', 'NR'].includes(grau)) grau = '';
+
+      results.push({
+        id: crypto.randomUUID(),
+        numero,
+        nome,
+        fase,
+        grau,
+        comentario: ''
+      });
+    }
+
+    // limpar buffer consumido
+    buffer = buffer.slice(-200);
+  }
+
+  return results;
+};
+
+  const attachComments = (items: any[], rawItems: any[]) => {
+
+  const fullText = rawItems.map(i => i.text).join(' ');
+
+  const regex = /(.+?)\s*\(([^)]+)\):\s*(\d{1,3})\s*-\s*([\s\S]*?)(?=(.+?\([^)]*\):\s*\d+\s*-)|$)/gi;
+
+  let match;
+
+  while ((match = regex.exec(fullText)) !== null) {
+
+    const nome = match[1].trim();
+    const inside = match[2];
+    const numero = match[3];
+    const comentario = match[4].trim();
+
+    let fase = '--';
+    let grau = '';
+
+    if (inside.includes('/')) {
+      const [f, g] = inside.split('/');
+      fase = f.trim();
+      grau = g.trim();
+    }
+
+    let item = items.find(i => i.numero === numero);
+
+    // fallback por nome (IMPORTANTÍSSIMO)
+    if (!item) {
+      item = items.find(i =>
+        i.nome.toLowerCase().includes(nome.toLowerCase())
+      );
+    }
+
+    if (item) {
+      item.comentario = comentario;
+      item.fase = fase || item.fase;
+      item.grau = grau || item.grau;
+    }
+  }
+};
+  
   const processTextData = (text: string) => {
     // 1. Limpeza Bruta do Lixo de PDF
     const safeText = text
@@ -310,47 +626,52 @@ export default function App() {
   };
 
   const handleFileUpload = async (e: any) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    e.target.value = ''; setStatus('loading'); setErrorMsg('');
-    if (file.type === 'application/pdf') {
-      if (!window.pdfjsLib) { setErrorMsg('Biblioteca PDF não carregada. Recarregue a página.'); setStatus('idle'); return; }
-      try {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-        let fullParsedText = '';
-        
-        for (let i = 1; i <= pdf.numPages; i++) {
-          const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          const itemsArray = textContent.items as any[];
-          
-          // Leitura linear clássica e segura (Sem X/Y Guessing)
-          itemsArray.sort((a, b) => {
-             if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
-                 return b.transform[5] - a.transform[5];
-             }
-             return a.transform[4] - b.transform[4];
-          });
+  const file = e.target.files[0];
+  if (!file) return;
 
-          let lastY = null;
-          let pageText = '';
-          for (const item of itemsArray) {
-             if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-                 pageText += '\n';
-             } else if (lastY !== null) {
-                 pageText += ' ';
-             }
-             pageText += item.str;
-             lastY = item.transform[5];
-          }
-          fullParsedText += pageText + '\n\n';
-        }
-        processTextData(fullParsedText);
-      } catch (err) { setErrorMsg('Erro fatal ao ler o PDF.'); setStatus('idle'); }
-    } else { setErrorMsg('Por favor, selecione um arquivo PDF válido.'); setStatus('idle'); }
-  };
+  e.target.value = '';
+  setStatus('loading');
+  setErrorMsg('');
 
+  if (file.type !== 'application/pdf') {
+    setErrorMsg('Por favor, selecione um PDF válido.');
+    setStatus('idle');
+    return;
+  }
+
+  if (!window.pdfjsLib) {
+    setErrorMsg('PDF.js ainda não carregou.');
+    setStatus('idle');
+    return;
+  }
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    let allItems: any[] = [];
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+
+      const pageItems = textContent.items.map((it: any) => ({
+        text: it.str.trim(),
+        x: it.transform[4],
+        y: it.transform[5]
+      }));
+
+      allItems.push(...pageItems);
+    }
+
+    processStructuredData(allItems);
+
+  } catch (err) {
+    console.error(err);
+    setErrorMsg('Erro ao ler PDF.');
+    setStatus('idle');
+  }
+};
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
   const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '', grau: '', comentario: '' }]);
