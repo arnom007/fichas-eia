@@ -101,23 +101,18 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // =====================================================================
-    // 🟠 CORREÇÃO CRUCIAL 1: Limpeza Global de Texto (Filtro de Lixo)
-    // Remove cabeçalhos e rodapés que causaram o erro na imagem.
-    // =====================================================================
+    // 1. Limpeza Global Rigorosa
     const cleanedGlobalText = text
       .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
       .replace(/Art\. 44.*?2012/gi, '')
       .replace(/--- PAGE \d+ ---/gi, '')
-      .replace(/\b\d+\s+de\s+\d+\b/gi, '') // Remove "1 de 1"
+      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
       .replace(/COMANDO DA AERONÁUTICA/gi, '')
-      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '') // Causa dos itens fantasma
-      .replace(/T-27 BÁSICO 20\d{2}/gi, '') // Causa dos itens fantasma
+      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
       .replace(/PROT[\s.:]*\d+/gi, '');
 
-    // =====================================================================
-    // ETAPA 0: METADADOS (Mantido)
-    // =====================================================================
+    // 2. Extração de Metadados
     const headerEndIdx = cleanedGlobalText.search(/\b1\s*-|Itens Afetivos|Comentários:/i);
     const headerText = headerEndIdx !== -1 ? cleanedGlobalText.substring(0, headerEndIdx) : cleanedGlobalText;
     const cleanHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').replace(/\|\|\|/g, '');
@@ -156,9 +151,7 @@ export default function App() {
 
     setMeta(prev => ({ esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor, fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao, tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr }));
 
-    // =====================================================================
-    // ETAPA 1 e 2: ESQUELETO (Criado estritamente pelas Tabelas Superiores)
-    // =====================================================================
+    // 3. O Esqueleto Inteligente (Reconstrutor de Linhas)
     const extractedSkeletonItems: any[] = [];
     const lines = cleanedGlobalText.split('\n');
 
@@ -178,62 +171,78 @@ export default function App() {
         continue;
       }
 
-      // TABELA 2: AFETIVOS/COGNITIVOS (Stage 2)
+      // TABELA 2: AFETIVOS
       if (isAffectiveArea) {
         const parts = line.split('|||').map(p => p.trim()).filter(p => p);
         if (parts.length >= 2) {
           const grade = parts[parts.length - 1].toUpperCase().replace(/\s+/g, '');
           if (/^(NORMAL|DESTACOU-SE|PRECISAMELHORAR|DEFICIENTE|ABAIXODOPADRÃO|PERIGOSO|N\/O|N\/A|NR|--)$/.test(grade)) {
-             extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: '', nome: parts[0], fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grade) ? '' : grade, comentario: '' });
+             // O nome afetivo é tudo menos o grau
+             const name = parts.slice(0, parts.length - 1).join(' ').trim();
+             extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: '', nome: name, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grade) ? '' : grade, comentario: '' });
           }
         }
       } 
-      // TABELA 1: MANOBRAS (Stage 1)
+      // TABELA 1: MANOBRAS E NÍVEIS
       else {
-        // Usa o separador espacial protegido |||
         const parts = line.split('|||').map(p => p.trim()).filter(p => p);
         if (parts.length >= 2) {
-          // 🟠 CORREÇÃO CRUCIAL 2: Regex Stricter para identificar Número do Item.
-          // Garante que cabeçalhos como "Número", "Grau", "Pousos" não criem itens fantasma.
-          const maneuverPart = parts[0];
-          const numMatch = maneuverPart.match(/^(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(.*)$/);
+          
+          const numMatch = parts[0].match(/^(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(.*)$/);
           
           if (numMatch) {
             const num = numMatch[1];
-            const name = numMatch[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+            let name = numMatch[2].trim(); // Nome parcial caso não tenha ficado separado
 
+            let phaseGradeStr = parts[parts.length - 1];
+            let phaseGradeIndex = parts.length - 1;
+
+            // Tratamento: se o PDF separou Fase e Grau (ex: 'RO' ||| '5')
+            if (parts.length >= 3 && /^(PR|RC|RM|RO|--)$/i.test(parts[parts.length - 2])) {
+                phaseGradeStr = parts[parts.length - 2] + ' ' + parts[parts.length - 1];
+                phaseGradeIndex = parts.length - 2;
+            }
+
+            // Junta os pedaços do meio para formar o Nome da manobra sem perder nada
+            if (!name) {
+                const nameParts = [];
+                for (let k = 1; k < phaseGradeIndex; k++) nameParts.push(parts[k]);
+                name = nameParts.join(' ').replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+            } else {
+                for (let k = 1; k < phaseGradeIndex; k++) name += ' ' + parts[k];
+                name = name.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+            }
+
+            // Lê Fase e Grau da string isolada
             let faseItem = '--';
             let grauItem = '';
-
-            const pgParts = parts[parts.length - 1].split(/\s+/);
+            const pgParts = phaseGradeStr.split(/\s+/);
+            
             if (pgParts.length >= 2) {
                 faseItem = pgParts[0].toUpperCase();
-                // 🟠 CORREÇÃO CRUCIAL 3: Pega apenas o primeiro número se houver encavalamento (ex: VI-01 "55")
                 const firstDigitGrade = pgParts[1].match(/^\d/);
                 grauItem = firstDigitGrade ? firstDigitGrade[0] : pgParts[1].toUpperCase();
             } else if (pgParts.length === 1) {
                 const singlePart = pgParts[0].toUpperCase();
                 if (singlePart === 'PR') faseItem = 'PR';
                 else if (/^(RC|RM|RO|--)$/.test(singlePart)) faseItem = singlePart;
-                // Atende a Ficha VI-01 onde vem apenas o Grau '5' sem fase
-                else if (/^\d$/.test(singlePart)) grauItem = singlePart; 
+                else if (/^\d$/.test(singlePart)) grauItem = singlePart; // Solução para "Voo sob Capota" (Apenas grau)
             }
 
             if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauItem.replace(/\s+/g, ''))) grauItem = '';
 
-            extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
+            if (name) { // Só salva se tiver um nome válido (ignora linhas perdidas)
+               extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
+            }
           }
         }
       }
     }
 
-    // =====================================================================
-    // ETAPA 3: MATCH DE COMENTÁRIOS (A sua ideia resiliente)
-    // =====================================================================
+    // 4. MATCH DE COMENTÁRIOS (Sua Lógica Mantida)
     if (commentsTextBlock) {
       const cleanCommentsTextBlock = commentsTextBlock.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
       const allCommentMatches: any[] = [];
-      // Regex busca o Título do comentário: "Nº - Nome (...):"
       const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
       let matchC;
       
@@ -255,7 +264,6 @@ export default function App() {
 
         const comentarioText = cleanCommentsTextBlock.substring(startIndex, endIndex).trim();
 
-        // 🟡 O MATCH DO ALUNO: Encaixa no Esqueleto (pelo número ou nome normalizado)
         let targetItem = extractedSkeletonItems.find(item => item.numero === cMatch.numero);
         if (!targetItem) {
           targetItem = extractedSkeletonItems.find(item => {
@@ -267,15 +275,13 @@ export default function App() {
 
         if (targetItem) {
           targetItem.comentario = comentarioText;
-          if (!targetItem.numero) targetItem.numero = cMatch.numero; // Preenche número de afetivos comentado
+          if (!targetItem.numero) targetItem.numero = cMatch.numero;
         } else {
-          // Fallback seguro se comentado, mas sumiu da tabela superior
           extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: cMatch.numero, nome: cMatch.nome, fase: '--', grau: '', comentario: comentarioText });
         }
       }
     }
 
-    // Ordenação final
     extractedSkeletonItems.sort((a: any, b: any) => {
       const numA = parseInt(a.numero);
       const numB = parseInt(b.numero);
@@ -303,7 +309,7 @@ export default function App() {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
           const itemsArray = textContent.items as any[];
-          // Ordenação espacial X/Y (Protege a ordem de leitura física das colunas)
+          
           itemsArray.sort((a, b) => (Math.abs(a.transform[5] - b.transform[5]) > 5) ? (b.transform[5] - a.transform[5]) : (a.transform[4] - b.transform[4]));
           const pageLines: any[][] = [];
           let currentLineGroup: any[] = [];
@@ -313,7 +319,7 @@ export default function App() {
             else { currentLineGroup.push(itemNode); }
           }
           if (currentLineGroup.length > 0) pageLines.push(currentLineGroup);
-          // O SEPARADOR FÍSICO PROTEGIDO (|||)
+          
           for (const rawLine of pageLines) {
             rawLine.sort((a, b) => a.transform[4] - b.transform[4]);
             let builtLineStr = '';
@@ -322,7 +328,7 @@ export default function App() {
               if (j < rawLine.length - 1) {
                 const nodeEdgeX = rawLine[j].transform[4] + (rawLine[j].width || 0);
                 const nextNodeEdgeX = rawLine[j + 1].transform[4];
-                if ((nextNodeEdgeX - nodeEdgeX) > 35) builtLineStr += ' ||| '; // Gap grande = Coluna separada
+                if ((nextNodeEdgeX - nodeEdgeX) > 35) builtLineStr += ' ||| ';
                 else builtLineStr += ' ';
               }
             }
