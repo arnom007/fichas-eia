@@ -58,6 +58,7 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
   </div>
 );
 
+// Auxiliar para a função de inteligência (Match Semântico)
 const normalizeStringForMatch = (str: string) => {
   return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
 };
@@ -100,578 +101,355 @@ export default function App() {
     });
   };
 
-const processStructuredData = (rawItems: any[]) => {
+  // ============================================================================
+  // ARQUITETURA DEFINITIVA (O BIZU)
+  // ============================================================================
 
-  const normalized = normalizeItems(rawItems);
-  const lines = buildLines(normalized);
-  const { left, right } = splitColumns(lines);
+  const processStructuredData = (rawItems: any[], fullText: string) => {
+    // 1. Extrair Metadados
+    extractMetadata(fullText);
 
-  const items = extractItems(left);
-  const comments = extractComments(right);
+    // 2. Normalizar e Separar Colunas (Eixos X e Y)
+    const normalized = normalizeItems(rawItems);
+    const lines = buildLines(normalized);
+    const { left, right } = splitColumns(lines);
 
-  const finalItems = mergeData(items, comments);
+    // 3. Extrair da Tabela (Isolando colunas)
+    const leftItems = parseColumn(left);
+    const rightItems = parseColumn(right);
+    
+    // 4. Extrair Itens Afetivos
+    const afetivos = extractAfetivos(fullText);
 
-  setItems(finalItems);
-  setStatus('reviewing');
-};
+    // 5. Juntar toda a tabela (Deduplicando se houver redundância)
+    const tableItemsMap = new Map();
+    [...leftItems, ...rightItems].forEach(it => tableItemsMap.set(it.numero, it));
+    const tableItems = Array.from(tableItemsMap.values());
+
+    // 6. Extrair Comentários (A fonte mais confiável)
+    const comments = extractComments(fullText);
+
+    // 7. Merge Inteligente (Usa número, ou similaridade semântica)
+    const finalItems = mergeData([...tableItems, ...afetivos], comments);
+
+    if (finalItems.length > 0) {
+      setItems(finalItems);
+      setStatus('reviewing');
+      setErrorMsg('');
+    } else {
+      setErrorMsg('Não foi possível extrair os dados estruturados do PDF.');
+      setStatus('idle');
+    }
+  };
+
+  // --- SUB-FUNÇÕES DA ARQUITETURA ---
+
+  const extractMetadata = (text: string) => {
+    const cleanHeader = text.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+
+    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
+    const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
+
+    let tipoMissaoDetectado = 'Normal';
+    if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
+    else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
+    else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMET\b/i) || cleanHeader.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
+
+    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
+    const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
+
+    const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const data = matchData ? matchData[1] : '';
+
+    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
+    let hdep = '', tev = '';
+    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
+    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1]; else hdep = times[0][1]; }
+
+    let fase = '';
+    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
+
+    const matchAeronave = cleanHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || cleanHeader.match(/\b(13\d{2}|14\d{2})\b/);
+    const aeronave = matchAeronave ? matchAeronave[1] : '';
+
+    const matchPousos = cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
+    const pousos = matchPousos ? matchPousos[1] : '';
+
+    const parecerMatch = text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i);
+    const parecerStr = parecerMatch ? parecerMatch[1].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+
+    setMeta(prev => ({ esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor, fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao, tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr }));
+  };
 
   const normalizeItems = (items: any[]) => {
-  return items
-    .map(i => ({
-      text: i.text.trim(),
-      x: i.x,
-      y: Math.round(i.y / 4) * 4
-    }))
-    .filter(i => i.text.length > 0);
-};
+    return items
+      .map(i => ({
+        text: i.text.trim(),
+        x: i.x,
+        y: Math.round(i.y / 5) * 5 // Agrupa linhas que estão milimetricamente desalinhadas
+      }))
+      .filter(i => i.text.length > 0);
+  };
 
   const buildLines = (items: any[]) => {
-  const map = new Map<number, any[]>();
-
-  items.forEach(i => {
-    if (!map.has(i.y)) map.set(i.y, []);
-    map.get(i.y).push(i);
-  });
-
-  return Array.from(map.entries())
-    .sort((a, b) => b[0] - a[0])
-    .map(([_, line]) =>
-      line.sort((a, b) => a.x - b.x)
-    );
-};
+    const map = new Map<number, any[]>();
+    items.forEach(i => {
+      if (!map.has(i.y)) map.set(i.y, []);
+      map.get(i.y)!.push(i);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => b[0] - a[0]) // Ordena verticalmente
+      .map(([_, line]) => line.sort((a, b) => a.x - b.x)); // Ordena horizontalmente
+  };
 
   const splitColumns = (lines: any[][]) => {
-  const LEFT_LIMIT = 300;
+    const LEFT_LIMIT = 300; // Ponto mágico que divide a tabela
+    const left: string[] = [];
+    const right: string[] = [];
 
-  const left: string[] = [];
-  const right: string[] = [];
-
-  lines.forEach(line => {
-    const l = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
-    const r = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
-
-    if (l) left.push(l);
-    if (r) right.push(r);
-  });
-
-  return { left, right };
-};
-const extractItems = (lines: string[]) => {
-
-  const results: any[] = [];
-  let current: any = null;
-
-  const isNumero = (t: string) => /^\d{1,3}$/.test(t);
-  const isFase = (t: string) => ['PR','RC','RM','RO'].includes(t);
-  const isGrau = (t: string) => /^[1-6]$/.test(t);
-
-  lines.forEach(line => {
-
-    const tokens = line.split(/\s+/);
-
-    for (let i = 0; i < tokens.length; i++) {
-      const t = tokens[i];
-
-      if (isNumero(t)) {
-        if (current) results.push(current);
-
-        current = {
-          id: crypto.randomUUID(),
-          numero: t,
-          nome: '',
-          fase: '--',
-          grau: '',
-          comentario: ''
-        };
-
-        continue;
-      }
-
-      if (!current) continue;
-
-      if (isFase(t)) {
-        current.fase = t;
-        continue;
-      }
-
-      if (isGrau(t)) {
-        current.grau = t;
-        continue;
-      }
-
-      // texto normal
-      current.nome += (current.nome ? ' ' : '') + t;
-    }
-  });
-
-  if (current) results.push(current);
-
-  return results;
-};
-  
-  const extractComments = (lines: string[]) => {
-
-  const text = lines.join(' ');
-
-  const regex = /(.+?)\s*\(([^)]+)\):\s*(\d{1,3})\s*-\s*([\s\S]*?)(?=(.+?\([^)]*\):\s*\d+\s*-)|$)/gi;
-
-  const results: any[] = [];
-  let match;
-
-  while ((match = regex.exec(text)) !== null) {
-
-    let nome = match[1].trim();
-    let numero = match[3];
-    let comentario = match[4].trim();
-
-    let fase = '--';
-    let grau = '';
-
-    const inside = match[2];
-
-    if (inside.includes('/')) {
-      const [f, g] = inside.split('/');
-      fase = f.trim();
-      grau = g.trim();
-    }
-
-    results.push({
-      numero,
-      nome,
-      fase,
-      grau,
-      comentario
+    lines.forEach(line => {
+      const l = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
+      const r = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
+      if (l.trim()) left.push(l.trim());
+      if (r.trim()) right.push(r.trim());
     });
-  }
-
-  return results;
-};
-
-  const similarity = (a: string, b: string) => {
-  a = a.toLowerCase();
-  b = b.toLowerCase();
-
-  if (a.includes(b) || b.includes(a)) return 1;
-
-  let score = 0;
-  const wordsA = a.split(' ');
-  const wordsB = b.split(' ');
-
-  wordsA.forEach(w => {
-    if (wordsB.includes(w)) score++;
-  });
-
-  return score / Math.max(wordsA.length, wordsB.length);
-};
-
-  const mergeData = (items: any[], comments: any[]) => {
-
-  return items.map(item => {
-
-    // 1. match perfeito por número
-    let match = comments.find(c => c.numero === item.numero);
-
-    // 2. fallback por nome (inteligente)
-    if (!match) {
-      match = comments
-        .map(c => ({ c, score: similarity(item.nome, c.nome) }))
-        .sort((a, b) => b.score - a.score)[0];
-
-      if (match && match.score > 0.5) match = match.c;
-      else match = null;
-    }
-
-    if (match) {
-      return {
-        ...item,
-        comentario: match.comentario || item.comentario,
-        fase: match.fase !== '--' ? match.fase : item.fase,
-        grau: match.grau || item.grau
-      };
-    }
-
-    return item;
-  })
-  .filter(i => i.nome.length > 3) // remove lixo
-  .sort((a, b) => Number(a.numero) - Number(b.numero));
-};
-  // 🔹 3. Separar colunas
-  const LEFT_LIMIT = 300;
-
-  const leftLines: string[] = [];
-  const rightLines: string[] = [];
-
-  lines.forEach(line => {
-    const left = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
-    const right = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
-
-    if (left.trim()) leftLines.push(left);
-    if (right.trim()) rightLines.push(right);
-  });
-
-  // 🔹 4. Parsear colunas separadamente
-  const leftItems = parseColumn(leftLines);
-  const rightItems = parseColumn(rightLines);
-
-  // 🔹 5. Juntar
-  let finalItems = [...leftItems, ...rightItems];
-
-  // 🔹 6. Deduplicar por número
-  const map = new Map();
-  finalItems.forEach(it => {
-    if (it.numero) map.set(it.numero, it);
-  });
-
-  finalItems = Array.from(map.values());
-
-  // 🔹 7. Ordenar
-  finalItems.sort((a, b) => Number(a.numero) - Number(b.numero));
-
-  // 🔹 8. Comentários (fonte MAIS confiável)
-  attachComments(finalItems, items);
-
-  setItems(finalItems);
-  setStatus('reviewing');
-};
+    return { left, right };
+  };
 
   const parseColumn = (lines: string[]) => {
-  const results: any[] = [];
+    const results: any[] = [];
+    let buffer = '';
 
-  let buffer = '';
+    for (let line of lines) {
+      // Corrige falha comum de OCR onde o número fica isolado (Ex: "12 \n - Tráfego")
+      line = line.replace(/(\d{1,2})\s*$/, '$1 -'); 
+      buffer += ' ' + line;
 
-  for (let line of lines) {
+      // Regex estruturada: Encontra "Num - Nome Fase Grau"
+      const itemRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*(.+?)\s*(?:(PR)|(RC|RM|RO|--)\s*[\/\-]?\s*([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(RC|RM|RO|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?=\s|$|\s(?:0?[1-9]|[1-5][0-9])\s*[-–—])/gi;
+      
+      let match;
+      let lastIndex = 0;
+      while ((match = itemRegex.exec(buffer)) !== null) {
+        const numero = match[1];
+        const nome = match[2].trim().replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '');
+        let fase = '--';
+        let grau = '';
 
-    // Corrigir número quebrado
-    line = line.replace(/(\d{1,3})\s*$/, '$1-');
+        if (match[3]) fase = 'PR';
+        else if (match[4]) { fase = match[4].toUpperCase(); grau = match[5].toUpperCase(); }
+        else if (match[6]) { fase = match[6].toUpperCase(); }
+        else if (match[7]) { grau = match[7].toUpperCase(); }
 
-    buffer += ' ' + line;
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grau.replace(/\s+/g, ''))) grau = '';
 
-    // Detecta item completo
-    const regex = /(\d{1,3})\s*-\s*([^0-9]+?)(?:\s+(PR|RC|RM|RO))?\s*(\d|N\/A|N\/O|NR)?(?=\s+\d{1,3}\s*-|$)/gi;
+        results.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
+        lastIndex = itemRegex.lastIndex;
+      }
+      
+      buffer = buffer.substring(lastIndex).trim(); // Mantém pedaços não processados para a próxima linha
+    }
+    return results;
+  };
 
+  const extractAfetivos = (fullText: string) => {
+    const results: any[] = [];
+    const idxAfetivos = fullText.search(/Itens Afetivos/i);
+    const idxComentarios = fullText.search(/Comentários:/i);
+    
+    if (idxAfetivos !== -1) {
+      const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
+      const regex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
+      let match;
+      while ((match = regex.exec(section)) !== null) {
+        let nome = match[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
+        let grau = match[2].toUpperCase().replace(/\s+/g, '');
+        if (nome.length > 3 && !/^\d/.test(nome)) {
+            results.push({ id: crypto.randomUUID(), numero: '', nome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grau) ? '' : grau, comentario: '' });
+        }
+      }
+    }
+    return results;
+  };
+
+  const extractComments = (fullText: string) => {
+    const results: any[] = [];
+    const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
+    
+    const matches = [];
     let match;
-    while ((match = regex.exec(buffer)) !== null) {
-      const numero = match[1];
-      const nome = match[2].trim();
-      const fase = match[3] || '--';
-      let grau = match[4] || '';
-
-      if (['N/A', 'N/O', 'NR'].includes(grau)) grau = '';
-
-      results.push({
-        id: crypto.randomUUID(),
-        numero,
-        nome,
-        fase,
-        grau,
-        comentario: ''
+    while ((match = commentRegex.exec(fullText)) !== null) {
+      matches.push({
+        index: match.index,
+        length: match[0].length,
+        numero: match[1].trim(),
+        nome: match[2].trim(),
+        insideParens: match[3] ? match[3].toUpperCase() : ''
       });
     }
 
-    // limpar buffer consumido
-    buffer = buffer.slice(-200);
-  }
+    for (let i = 0; i < matches.length; i++) {
+      const current = matches[i];
+      const start = current.index + current.length;
+      let end = i + 1 < matches.length ? matches[i+1].index : fullText.length;
 
-  return results;
-};
+      const assIdx = fullText.indexOf('Ass. Digital', start);
+      const recIdx = fullText.indexOf('Recomendações/Parecer:', start);
+      if (assIdx !== -1 && assIdx < end) end = assIdx;
+      if (recIdx !== -1 && recIdx < end) end = recIdx;
 
-  const attachComments = (items: any[], rawItems: any[]) => {
+      const comentario = fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-  const fullText = rawItems.map(i => i.text).join(' ');
+      let fase = '--';
+      let grau = '';
+      
+      if (current.insideParens) {
+        if (current.insideParens.includes('/')) {
+            const parts = current.insideParens.split('/');
+            fase = parts[0].trim() || '--';
+            grau = parts[1].trim();
+        } else if (current.insideParens === 'PR') {
+            fase = 'PR';
+        } else if (/^[1-6]$/.test(current.insideParens)) {
+            grau = current.insideParens;
+        } else {
+            fase = current.insideParens;
+        }
+      }
+      
+      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grau.replace(/\s+/g, ''))) grau = '';
 
-  const regex = /(.+?)\s*\(([^)]+)\):\s*(\d{1,3})\s*-\s*([\s\S]*?)(?=(.+?\([^)]*\):\s*\d+\s*-)|$)/gi;
-
-  let match;
-
-  while ((match = regex.exec(fullText)) !== null) {
-
-    const nome = match[1].trim();
-    const inside = match[2];
-    const numero = match[3];
-    const comentario = match[4].trim();
-
-    let fase = '--';
-    let grau = '';
-
-    if (inside.includes('/')) {
-      const [f, g] = inside.split('/');
-      fase = f.trim();
-      grau = g.trim();
+      results.push({ numero: current.numero, nome: current.nome, fase, grau, comentario });
     }
+    return results;
+  };
 
-    let item = items.find(i => i.numero === numero);
+  const similarity = (a: string, b: string) => {
+    a = normalizeStringForMatch(a);
+    b = normalizeStringForMatch(b);
+    if (a.includes(b) || b.includes(a)) return 1;
+    
+    let score = 0;
+    const wordsA = a.split(' ').filter(w => w.length > 2);
+    const wordsB = b.split(' ').filter(w => w.length > 2);
+    
+    if (wordsA.length === 0 || wordsB.length === 0) return 0;
+    
+    wordsA.forEach(w => { if (wordsB.includes(w)) score++; });
+    return score / Math.max(wordsA.length, wordsB.length);
+  };
 
-    // fallback por nome (IMPORTANTÍSSIMO)
-    if (!item) {
-      item = items.find(i =>
-        i.nome.toLowerCase().includes(nome.toLowerCase())
-      );
-    }
+  const mergeData = (items: any[], comments: any[]) => {
+    const finalItems = [...items]; 
 
-    if (item) {
-      item.comentario = comentario;
-      item.fase = fase || item.fase;
-      item.grau = grau || item.grau;
-    }
-  }
-};
-  
-  const processTextData = (text: string) => {
-    // 1. Limpeza Bruta do Lixo de PDF
-    const safeText = text
-      .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-      .replace(/Art\. 44.*?2012/gi, '')
-      .replace(/--- PAGE \d+ ---/gi, '')
-      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-      .replace(/COMANDO DA AERONÁUTICA/gi, '')
-      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
-      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-      .replace(/PROT[\s.:]*\d+/gi, '')
-      .replace(/Itens Afetivos - Cognitivos:/gi, 'Itens Afetivos:');
+    comments.forEach(c => {
+      // 1. Match perfeito por número
+      let target = finalItems.find(it => it.numero === c.numero);
 
-    // 2. ZONAMENTO - Separar as áreas com precisão militar
-    const idxTableStart = safeText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i);
-    const idxAfetivos = safeText.search(/Itens Afetivos/i);
-    const idxComentarios = safeText.search(/Comentários:/i);
+      // 2. Fallback Inteligente (BIZU)
+      if (!target) {
+        const bestMatch = finalItems
+            .map(it => ({ it, score: similarity(it.nome, c.nome) }))
+            .sort((a, b) => b.score - a.score)[0];
 
-    if (idxTableStart === -1) {
-      setErrorMsg('Não foi possível identificar o início da tabela de manobras na ficha.');
+        if (bestMatch && bestMatch.score > 0.4) target = bestMatch.it;
+      }
+
+      if (target) {
+        target.comentario = c.comentario || target.comentario;
+        if (c.fase !== '--' && c.fase) target.fase = c.fase;
+        if (c.grau) target.grau = c.grau;
+        if (!target.numero) target.numero = c.numero; // Puxa número para itens afetivos
+      } else {
+        // Item existia nos comentários mas não na tabela
+        finalItems.push({
+            id: crypto.randomUUID(),
+            numero: c.numero,
+            nome: c.nome,
+            fase: c.fase || '--',
+            grau: c.grau || '',
+            comentario: c.comentario
+        });
+      }
+    });
+
+    return finalItems
+        .filter(i => i.nome.length > 2 && !/esquadrão/i.test(i.nome)) // Limpa ruídos residuais
+        .sort((a, b) => {
+            const numA = parseInt(a.numero);
+            const numB = parseInt(b.numero);
+            if (isNaN(numA) && isNaN(numB)) return 0;
+            if (isNaN(numA)) return 1; 
+            if (isNaN(numB)) return -1;
+            return numA - numB;
+        });
+  };
+
+  const handleFileUpload = async (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    e.target.value = '';
+    setStatus('loading');
+    setErrorMsg('');
+
+    if (file.type !== 'application/pdf') {
+      setErrorMsg('Por favor, selecione um PDF válido.');
       setStatus('idle');
       return;
     }
 
-    // Isolar os blocos
-    const headerText = safeText.substring(0, idxTableStart).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-    const tableText = safeText.substring(idxTableStart, idxAfetivos !== -1 ? idxAfetivos : (idxComentarios !== -1 ? idxComentarios : safeText.length));
-    const afetivosText = idxAfetivos !== -1 ? safeText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : safeText.length) : '';
-    const comentariosText = idxComentarios !== -1 ? safeText.substring(idxComentarios) : '';
-
-    // =====================================================================
-    // ETAPA 0: METADADOS (Somente no headerText)
-    // =====================================================================
-    const matchGrauMissao = headerText.match(/GRAU\s*(\d{1,2})/i);
-    const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
-
-    let tipoMissaoDetectado = 'Normal';
-    if (headerText.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
-    else if (headerText.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
-    else if (headerText.match(/\bAbortiva\b/i) || headerText.match(/\bVMET\b/i) || headerText.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
-
-    const matchMissao = headerText.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
-    const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
-
-    const matchData = headerText.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-    const data = matchData ? matchData[1] : '';
-
-    const times = Array.from(headerText.matchAll(/\b(\d{2}:\d{2})\b/g));
-    let hdep = '', tev = '';
-    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
-    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(headerText)) tev = times[0][1]; else hdep = times[0][1]; }
-
-    let fase = '';
-    const matchFase = headerText.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
-    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
-
-    const matchAeronave = headerText.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || headerText.match(/\b(13\d{2}|14\d{2})\b/);
-    const aeronave = matchAeronave ? matchAeronave[1] : '';
-
-    const matchPousos = headerText.match(/POUSOS[\s:]*(\d{1,2})\b/i);
-    const pousos = matchPousos ? matchPousos[1] : '';
-
-    const parecerMatch = safeText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i);
-    const parecerStr = parecerMatch ? parecerMatch[1].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
-
-    setMeta(prev => ({ esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor, fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao, tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr }));
-
-    // =====================================================================
-    // ETAPA 1: O ESQUELETO DA TABELA (Fatiamento Inteligente)
-    // =====================================================================
-    const extractedSkeletonItems: any[] = [];
-    
-    // 1. Achata a tabela inteira e garante espaçamento após números 
-    // Ex: "10Tráfego" vira "10 Tráfego"
-    let cleanTableText = tableText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-    cleanTableText = cleanTableText.replace(/\b([1-9]|[1-5][0-9])\b([A-Za-zÀ-ÿ])/g, '$1 $2');
-
-    // 2. Fatiador Cirúrgico: Quebra exatamente antes de cada número de manobra (1 a 59)
-    const chunkRegex = /(?=\b(?:[1-9]|[1-5][0-9])\b\s*[-–—]?\s+[A-Za-zÀ-ÿ])/;
-    const chunks = cleanTableText.split(chunkRegex);
-
-    for (let chunk of chunks) {
-      chunk = chunk.trim();
-      if (!chunk) continue;
-
-      // Extrai o Número e o Resto
-      const numMatch = chunk.match(/^([1-9]|[1-5][0-9])\b\s*[-–—]?\s+(.*)$/);
-      if (!numMatch) continue;
-
-      const num = numMatch[1];
-      const rest = numMatch[2];
-
-      // Busca a Fase e o Grau estritamente no final da string do item
-      const endMatch = rest.match(/(.*?)\s+(PR|(?:RC|RM|RO|--)\s*(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(?:RC|RM|RO|--)|(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--))\s*$/i);
-      
-      let name = rest;
-      let rawPG = '';
-
-      if (endMatch) {
-          name = endMatch[1].trim();
-          rawPG = endMatch[2].trim().toUpperCase();
-      }
-
-      name = name.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '');
-
-      let faseItem = '--';
-      let grauItem = '';
-
-      // Interpreta a Nota/Fase (Resolve o problema da VI-01)
-      if (rawPG === 'PR') {
-          faseItem = 'PR';
-      } else if (/^(RC|RM|RO|--)$/.test(rawPG)) {
-          faseItem = rawPG;
-      } else if (/^([1-6]|N\/O|N\/A|NR|A\s*N\/)$/.test(rawPG.replace(/\s+/g, ''))) {
-          grauItem = rawPG.replace(/\s+/g, '');
-      } else {
-          const pgParts = rawPG.split(/\s+/);
-          if (pgParts.length >= 2) {
-              faseItem = pgParts[0];
-              grauItem = pgParts[1].replace(/\s+/g, '');
-          }
-      }
-
-      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauItem)) grauItem = '';
-
-      extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
+    if (!window.pdfjsLib) {
+      setErrorMsg('A biblioteca PDF.js não foi carregada.');
+      setStatus('idle');
+      return;
     }
 
-    // =====================================================================
-    // ETAPA 2: ITENS AFETIVOS
-    // =====================================================================
-    if (afetivosText) {
-      const cleanAfetivos = afetivosText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-      const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
-      let matchA;
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-      while ((matchA = afetivoRegex.exec(cleanAfetivos)) !== null) {
-        let name = matchA[1].trim();
-        const grade = matchA[2].toUpperCase().replace(/\s+/g, '');
+      const rawItems: any[] = [];
+      let fullText = '';
 
-        if (name.length > 3 && !/^\d/.test(name) && !name.toLowerCase().includes('itens afetivos') && !name.toLowerCase().includes('cognitivos')) {
-          extractedSkeletonItems.push({ 
-            id: crypto.randomUUID(), numero: '', nome: name, fase: '--', 
-            grau: ['--', 'N/O', 'N/A', 'NR'].includes(grade) ? '' : grade, comentario: '' 
-          });
-        }
-      }
-    }
-
-    // =====================================================================
-    // ETAPA 3: O MATCH DOS COMENTÁRIOS
-    // =====================================================================
-    if (comentariosText) {
-      const cleanCommentsTextBlock = comentariosText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-      const allCommentMatches: any[] = [];
-      const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
-      let matchC;
-      
-      while ((matchC = commentRegex.exec(cleanCommentsTextBlock)) !== null) {
-        allCommentMatches.push({ index: matchC.index, length: matchC[0].length, numero: matchC[1].trim(), nome: matchC[2].trim() });
-      }
-
-      allCommentMatches.sort((a, b) => a.index - b.index);
-
-      for (let i = 0; i < allCommentMatches.length; i++) {
-        const cMatch = allCommentMatches[i];
-        const startIndex = cMatch.index + cMatch.length;
-        let endIndex = (i + 1 < allCommentMatches.length) ? allCommentMatches[i + 1].index : cleanCommentsTextBlock.length;
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
         
-        const assDigitalIndex = cleanCommentsTextBlock.indexOf('Ass. Digital', startIndex);
-        const recomendacoesIndex = cleanCommentsTextBlock.indexOf('Recomendações/Parecer:', startIndex);
-        if (assDigitalIndex !== -1 && assDigitalIndex < endIndex) endIndex = assDigitalIndex;
-        if (recomendacoesIndex !== -1 && recomendacoesIndex < endIndex) endIndex = recomendacoesIndex;
+        // Puxa os dados brutos com posições X e Y para a Tabela
+        rawItems.push(...textContent.items.map((it: any) => ({
+          text: it.str.trim(),
+          x: it.transform[4],
+          y: it.transform[5]
+        })));
 
-        const comentarioText = cleanCommentsTextBlock.substring(startIndex, endIndex).trim();
-
-        // Faz o Match com o Esqueleto
-        let targetItem = extractedSkeletonItems.find(item => item.numero === cMatch.numero);
-        if (!targetItem) {
-          targetItem = extractedSkeletonItems.find(item => {
-             const n1 = normalizeStringForMatch(item.nome);
-             const n2 = normalizeStringForMatch(cMatch.nome);
-             return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
-          });
+        // Cria o fullText clássico para ler Cabeçalho e Comentários
+        let sortedForText = [...textContent.items].sort((a, b) => {
+          if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
+          return a.transform[4] - b.transform[4];
+        });
+        
+        let lastY = null;
+        for (const it of sortedForText) {
+           if (lastY !== null && Math.abs(it.transform[5] - lastY) > 5) fullText += '\n';
+           else if (lastY !== null) fullText += ' ';
+           fullText += it.str;
+           lastY = it.transform[5];
         }
-
-        if (targetItem) {
-          targetItem.comentario = comentarioText;
-          if (!targetItem.numero) targetItem.numero = cMatch.numero;
-        } else {
-          // Se o item tem comentário, mas sumiu da tabela por alguma anomalia, adiciona mesmo assim
-          extractedSkeletonItems.push({ id: crypto.randomUUID(), numero: cMatch.numero, nome: cMatch.nome, fase: '--', grau: '', comentario: comentarioText });
-        }
+        fullText += '\n\n';
       }
+
+      // Dispara a nova arquitetura do BIZU.pdf
+      processStructuredData(rawItems, fullText);
+
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Erro fatal ao processar o arquivo PDF.');
+      setStatus('idle');
     }
-
-    extractedSkeletonItems.sort((a: any, b: any) => {
-      const numA = parseInt(a.numero);
-      const numB = parseInt(b.numero);
-      if (isNaN(numA) && isNaN(numB)) return 0;
-      if (isNaN(numA)) return 1; 
-      if (isNaN(numB)) return -1;
-      return numA - numB;
-    });
-
-    if (extractedSkeletonItems.length > 0) { setItems(extractedSkeletonItems); setStatus('reviewing'); setErrorMsg(''); } 
-    else { setErrorMsg('Não foi possível extrair os itens. O PDF pode não estar no padrão esperado.'); setStatus('idle'); }
   };
 
-  const handleFileUpload = async (e: any) => {
-  const file = e.target.files[0];
-  if (!file) return;
-
-  e.target.value = '';
-  setStatus('loading');
-  setErrorMsg('');
-
-  if (file.type !== 'application/pdf') {
-    setErrorMsg('Por favor, selecione um PDF válido.');
-    setStatus('idle');
-    return;
-  }
-
-  if (!window.pdfjsLib) {
-    setErrorMsg('PDF.js ainda não carregou.');
-    setStatus('idle');
-    return;
-  }
-
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-    let allItems: any[] = [];
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-
-      const pageItems = textContent.items.map((it: any) => ({
-        text: it.str.trim(),
-        x: it.transform[4],
-        y: it.transform[5]
-      }));
-
-      allItems.push(...pageItems);
-    }
-
-    processStructuredData(allItems);
-
-  } catch (err) {
-    console.error(err);
-    setErrorMsg('Erro ao ler PDF.');
-    setStatus('idle');
-  }
-};
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
   const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '', grau: '', comentario: '' }]);
@@ -719,7 +497,7 @@ const extractItems = (lines: string[]) => {
           <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Envie o arquivo PDF original. O sistema analisa tabelas superiores, afetivos e comentários automaticamente.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Analisando Estrutura</h2><p className="text-slate-500">Separando colunas, criando esqueleto e vinculando comentários...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Analisando Estrutura</h2><p className="text-slate-500">Separando colunas fisicamente, extraindo dados e aplicando IA de similaridade...</p></div>
         )}
         {status === 'reviewing' && (
           <div className="space-y-6">
