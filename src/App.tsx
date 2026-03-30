@@ -45,37 +45,8 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 );
 
 // ---------------------------------------------------------------------------------
-// ARQUITETURA DO ALUNO: MÉTODOS DE EXTRAÇÃO ESPACIAL
+// ARQUITETURA DE EXTRAÇÃO ESPACIAL
 // ---------------------------------------------------------------------------------
-
-const detectColumns = (lines: any[][]) => {
-  const xs: number[] = [];
-  lines.forEach((l: any[]) => l.forEach((t: any) => xs.push(t.x)));
-  if (xs.length === 0) return { fase: 999, grau: 999 };
-
-  xs.sort((a: number, b: number) => a - b);
-  const clusters: number[][] = [];
-  
-  xs.forEach((x: number) => {
-    let found = false;
-    for (let c of clusters) {
-      if (Math.abs(c[0] - x) < 35) { // Tolerância de 35px
-        c.push(x);
-        found = true;
-        break;
-      }
-    }
-    if (!found) clusters.push([x]);
-  });
-
-  const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
-
-  return {
-    nome: centers[0] || 0,
-    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : 999,
-    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 999
-  };
-};
 
 const buildLines = (items: any[]) => {
   const map = new Map<number, any[]>();
@@ -89,20 +60,13 @@ const buildLines = (items: any[]) => {
     .map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
 };
 
-const classifyToken = (text: string) => {
-  if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
-  if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
-  if (/^[1-6]$/.test(text)) return 'grau';
-  if (/^\d{1,3}$/.test(text)) return 'numero';
-  return 'texto';
-};
-
 const mergeBrokenLines = (lines: any[][]) => {
   const merged: any[][] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const firstText = line[0]?.text || '';
     
+    // Se a linha não começa com número e já temos itens, é o nome quebrando de linha
     if (!/^\d{1,3}/.test(firstText) && merged.length > 0) {
       merged[merged.length - 1].push(...line);
       merged[merged.length - 1].sort((a: any, b: any) => a.x - b.x); 
@@ -113,41 +77,56 @@ const mergeBrokenLines = (lines: any[][]) => {
   return merged;
 };
 
-const extractItemsFromLines = (lines: any[][], columns: any) => {
+// 🟢 NOVO EXTRATOR INFALÍVEL (Pelas Pontas)
+const extractItemsFromLines = (lines: any[][]) => {
   const items: any[] = [];
   
   lines.forEach((line: any[]) => {
-    let numero = '';
-    let nome = '';
-    let fase = '--';
-    let grau = '';
+    // 1. Transforma os tokens da linha em uma única String limpa
+    const rawText = line.map((t: any) => t.text).join(' ').trim();
+    const cleanText = rawText.replace(/^(\d{1,3})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2');
+    
+    let tempNome = cleanText;
+    let rawPG = '';
+    
+    // 2. Corta a Fase e Grau pelo FINAL da frase (muito mais seguro)
+    const endMatch = tempNome.match(/\s+(PR|(?:RC|RM|RO|--)\s*[\/\-]?\s*(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(?:RC|RM|RO|--)|(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--))$/i);
+    
+    if (endMatch) {
+      rawPG = endMatch[1].toUpperCase();
+      tempNome = tempNome.substring(0, endMatch.index).trim();
+    }
+    
+    // 3. Corta o Número pelo INÍCIO da frase
+    const startMatch = tempNome.match(/^(\d{1,3})\s*[-–—.:]?\s*(.*)$/);
+    
+    if (startMatch) {
+      const numero = startMatch[1];
+      const nome = startMatch[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+      
+      let fase = '--';
+      let grau = '';
 
-    line.forEach((token: any) => {
-      const cleanText = token.text.replace(/^(\d{1,3})([A-Za-zÀ-ÿ])/, '$1 $2');
-      const subTokens = cleanText.split(' ');
-
-      // CORREÇÃO: Adicionada a tipagem ': string' no subText para o TS não reclamar
-      subTokens.forEach((subText: string) => {
-        const type = classifyToken(subText);
-
-        if (type === 'fase') {
-          fase = subText.toUpperCase();
-        } else if (type === 'grau') {
-          grau = subText.toUpperCase();
-        } else if (type === 'numero' && !numero) {
-          numero = subText;
-        } else if (type === 'texto') {
-          if (token.x < columns.fase) {
-            nome += (nome ? ' ' : '') + subText;
+      // 4. Interpreta a Fase e Grau separados
+      if (rawPG) {
+        if (rawPG === 'PR') fase = 'PR';
+        else if (/^(RC|RM|RO|--)$/.test(rawPG)) fase = rawPG;
+        else if (/^([1-6]|N\/O|N\/A|NR|A\s*N\/)$/.test(rawPG.replace(/\s+/g, ''))) grau = rawPG.replace(/\s+/g, '');
+        else {
+          const phaseMatch = rawPG.match(/^(RC|RM|RO|--)\s*[\/\-]?\s*(.*)$/);
+          if (phaseMatch) {
+             fase = phaseMatch[1];
+             grau = phaseMatch[2].replace(/\s+/g, '');
           }
         }
-      });
-    });
+      }
 
-    nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-
-    if (numero && nome.length > 2) {
-      items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
+      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grau)) grau = '';
+      
+      // Salva o item perfeitamente montado
+      if (numero && nome.length > 2) {
+        items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
+      }
     }
   });
 
@@ -211,7 +190,7 @@ export default function App() {
       parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
 
-    // ISOLAR A TABELA DE MANOBRAS E APLICAR OS MÉTODOS DO ALUNO
+    // ISOLAR A TABELA DE MANOBRAS
     const normalized = rawItems.map((i: any) => ({ text: i.text.trim(), x: i.x, y: i.y })).filter((i: any) => i.text.length > 0);
     const allLines = buildLines(normalized);
 
@@ -237,12 +216,10 @@ export default function App() {
     const leftMerged = mergeBrokenLines(leftLines);
     const rightMerged = mergeBrokenLines(rightLines);
 
-    const leftCols = detectColumns(leftMerged);
-    const rightCols = detectColumns(rightMerged);
-
+    // 🟢 EXTRAI TODA A TABELA (COM OU SEM COMENTÁRIOS)
     const tableItems = [
-      ...extractItemsFromLines(leftMerged, leftCols),
-      ...extractItemsFromLines(rightMerged, rightCols)
+      ...extractItemsFromLines(leftMerged),
+      ...extractItemsFromLines(rightMerged)
     ];
 
     // EXTRAÇÃO DE ITENS AFETIVOS
@@ -262,14 +239,13 @@ export default function App() {
       }
     }
 
-    // EXTRAÇÃO DE COMENTÁRIOS
+    // EXTRAÇÃO DE COMENTÁRIOS DO RODAPÉ
     const comments: any[] = [];
     const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
     const matches: any[] = [];
     let matchC;
     while ((matchC = commentRegex.exec(fullText)) !== null) {
-      // CORREÇÃO: matchC[3] no lugar do match[3] que estava dando erro
-      matches.push({ index: matchC.index, length: matchC[0].length, numero: matchC[1].trim(), nome: matchC[2].trim(), insideParens: matchC[3] ? matchC[3].toUpperCase() : '' });
+      matches.push({ index: matchC.index, length: matchC[0].length, numero: matchC[1].trim(), nome: matchC[2].trim(), insideParens: matchC[3] ? match[3].toUpperCase() : '' });
     }
 
     for (let i = 0; i < matches.length; i++) {
@@ -293,7 +269,7 @@ export default function App() {
       comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() });
     }
 
-    // MERGE INTELIGENTE (Tabela + Afetivos + Comentários)
+    // MERGE FINAL: Tabela Completa + Textos de Comentários
     const similarity = (a: string, b: string) => {
       a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
       b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -414,7 +390,7 @@ export default function App() {
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Processamento local instantâneo. Arquitetura Espacial e Classificador de Tokens Integrados.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Processamento local instantâneo. Arquitetura Espacial Definitiva.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
@@ -461,7 +437,7 @@ export default function App() {
                         <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
                         <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Comentário..." /></td>
+                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar comentário..." /></td>
                         <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
