@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle } from 'lucide-react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 declare global {
   interface Window {
@@ -8,7 +9,7 @@ declare global {
 }
 
 const getGradeColorClass = (grau: string) => {
-  const g = grau.toUpperCase().trim();
+  const g = grau?.toUpperCase().trim() || '';
   if (g === '1' || g === 'PERIGOSO' || g === '2' || g === 'DEFICIENTE') return 'text-red-500 font-bold';
   if (g === '3' || g === 'PRECISA MELHORAR') return 'text-yellow-600 font-bold';
   if (g === '4' || g === 'NORMAL') return 'text-green-600 font-bold';
@@ -22,7 +23,7 @@ const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass 
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <input 
       type="text" 
-      value={value} 
+      value={value || ''} 
       onChange={onChange} 
       placeholder={placeholder}
       maxLength={maxLength}
@@ -36,7 +37,7 @@ const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: 
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <select 
-      value={value} 
+      value={value || ''} 
       onChange={onChange} 
       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none"
     >
@@ -50,18 +51,13 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <textarea 
-      value={value} 
+      value={value || ''} 
       onChange={onChange} 
       placeholder={placeholder}
       className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium resize-y min-h-[60px] leading-relaxed"
     />
   </div>
 );
-
-// Auxiliar para a função de inteligência (Match Semântico)
-const normalizeStringForMatch = (str: string) => {
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-};
 
 export default function App() {
   const [status, setStatus] = useState('idle'); 
@@ -101,289 +97,111 @@ export default function App() {
     });
   };
 
-  // ============================================================================
-  // ARQUITETURA DEFINITIVA (O BIZU)
-  // ============================================================================
-
-  const processStructuredData = (rawItems: any[], fullText: string) => {
-    // 1. Extrair Metadados
-    extractMetadata(fullText);
-
-    // 2. Normalizar e Separar Colunas (Eixos X e Y)
-    const normalized = normalizeItems(rawItems);
-    const lines = buildLines(normalized);
-    const { left, right } = splitColumns(lines);
-
-    // 3. Extrair da Tabela (Isolando colunas)
-    const leftItems = parseColumn(left);
-    const rightItems = parseColumn(right);
+  // Função que envia o texto extraído para a Inteligência Artificial
+  const processWithAI = async (fullText: string) => {
+    const apiKey = import.meta.env.VITE_GEMINI;
     
-    // 4. Extrair Itens Afetivos
-    const afetivos = extractAfetivos(fullText);
+    if (!apiKey) {
+      setErrorMsg('Chave da API do Gemini não encontrada. Configure a variável VITE_GEMINI no Vercel.');
+      setStatus('idle');
+      return;
+    }
 
-    // 5. Juntar toda a tabela (Deduplicando se houver redundância)
-    const tableItemsMap = new Map();
-    [...leftItems, ...rightItems].forEach(it => tableItemsMap.set(it.numero, it));
-    const tableItems = Array.from(tableItemsMap.values());
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    // 6. Extrair Comentários (A fonte mais confiável)
-    const comments = extractComments(fullText);
+      const prompt = `
+        Você é um assistente especializado em organizar dados de instrução aérea da AFA.
+        Abaixo está o texto bruto extraído de um PDF de uma Ficha de Voo. O formato original do PDF tem colunas e comentários no final.
+        Sua tarefa é ler este texto embaralhado, extrair os metadados da missão e estruturar cada item avaliado associando a manobra com seu respectivo grau, fase e comentário.
 
-    // 7. Merge Inteligente (Usa número, ou similaridade semântica)
-    const finalItems = mergeData([...tableItems, ...afetivos], comments);
+        Instruções de extração:
+        1. Para o 'tipoMissao', use "Abortiva" se encontrar VMET ou VMAT. Se houver "Extra", use "Extra". Caso contrário, "Normal".
+        2. Os 'itens' devem incluir tanto as manobras numeradas quanto os Itens Afetivos/Cognitivos (estes não têm número, deixe vazio).
+        3. Para a 'fase' do item, use PR, RC, RM, RO, ou '--'.
+        4. Associe o comentário correto a cada item. Se não houver comentário, deixe vazio "".
 
-    if (finalItems.length > 0) {
-      setItems(finalItems);
+        Responda APENAS com um objeto JSON válido, sem formatação Markdown (\`\`\`json), estritamente neste formato:
+        {
+          "meta": {
+            "missao": "",
+            "aluno1p": "",
+            "instrutor": "",
+            "grauMissao": "",
+            "tipoMissao": "Normal",
+            "data": "",
+            "fase": "",
+            "aeronave": "",
+            "hdep": "",
+            "tev": "",
+            "pousos": "",
+            "parecer": ""
+          },
+          "itens": [
+            {
+              "numero": "1",
+              "nome": "Partida",
+              "fase": "RC",
+              "grau": "5",
+              "comentario": "Bom acionamento."
+            }
+          ]
+        }
+
+        Aqui está o texto bruto do PDF:
+        ---
+        ${fullText}
+      `;
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      let textResponse = response.text();
+
+      // Limpeza de possíveis blocos de código Markdown
+      textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+
+      const parsedData = JSON.parse(textResponse);
+
+      // Atualizar os estados da aplicação com os dados limpos da IA
+      if (parsedData.meta) {
+        setMeta({
+          esquadrilha: '', // Esquadrilha não vem no PDF, usuário preenche
+          aluno1p: parsedData.meta.aluno1p?.slice(0, 3) || '',
+          instrutor: parsedData.meta.instrutor?.slice(0, 3) || '',
+          fase: parsedData.meta.fase || '',
+          aeronave: parsedData.meta.aeronave || '',
+          data: parsedData.meta.data || '',
+          missao: parsedData.meta.missao || '',
+          grauMissao: parsedData.meta.grauMissao || '',
+          tipoMissao: parsedData.meta.tipoMissao || 'Normal',
+          pousos: parsedData.meta.pousos || '',
+          hdep: parsedData.meta.hdep || '',
+          tev: parsedData.meta.tev || '',
+          parecer: parsedData.meta.parecer || ''
+        });
+      }
+
+      if (parsedData.itens && Array.isArray(parsedData.itens)) {
+        const itensComId = parsedData.itens.map((it: any) => ({
+          id: crypto.randomUUID(),
+          numero: it.numero || '',
+          nome: it.nome || '',
+          fase: it.fase || '--',
+          grau: it.grau || '',
+          comentario: it.comentario || ''
+        }));
+        setItems(itensComId);
+      }
+
       setStatus('reviewing');
       setErrorMsg('');
-    } else {
-      setErrorMsg('Não foi possível extrair os dados estruturados do PDF.');
+
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Falha ao processar os dados com a IA. Verifique se o documento é válido.');
       setStatus('idle');
     }
-  };
-
-  // --- SUB-FUNÇÕES DA ARQUITETURA ---
-
-  const extractMetadata = (text: string) => {
-    const cleanHeader = text.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-
-    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
-    const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
-
-    let tipoMissaoDetectado = 'Normal';
-    if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
-    else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
-    else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMET\b/i) || cleanHeader.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
-
-    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
-    const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
-
-    const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
-    const data = matchData ? matchData[1] : '';
-
-    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
-    let hdep = '', tev = '';
-    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
-    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1]; else hdep = times[0][1]; }
-
-    let fase = '';
-    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
-    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
-
-    const matchAeronave = cleanHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || cleanHeader.match(/\b(13\d{2}|14\d{2})\b/);
-    const aeronave = matchAeronave ? matchAeronave[1] : '';
-
-    const matchPousos = cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
-    const pousos = matchPousos ? matchPousos[1] : '';
-
-    const parecerMatch = text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i);
-    const parecerStr = parecerMatch ? parecerMatch[1].replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
-
-    setMeta(prev => ({ esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor, fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao, tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr }));
-  };
-
-  const normalizeItems = (items: any[]) => {
-    return items
-      .map(i => ({
-        text: i.text.trim(),
-        x: i.x,
-        y: Math.round(i.y / 5) * 5 // Agrupa linhas que estão milimetricamente desalinhadas
-      }))
-      .filter(i => i.text.length > 0);
-  };
-
-  const buildLines = (items: any[]) => {
-    const map = new Map<number, any[]>();
-    items.forEach(i => {
-      if (!map.has(i.y)) map.set(i.y, []);
-      map.get(i.y)!.push(i);
-    });
-    return Array.from(map.entries())
-      .sort((a, b) => b[0] - a[0]) // Ordena verticalmente
-      .map(([_, line]) => line.sort((a, b) => a.x - b.x)); // Ordena horizontalmente
-  };
-
-  const splitColumns = (lines: any[][]) => {
-    const LEFT_LIMIT = 300; // Ponto mágico que divide a tabela
-    const left: string[] = [];
-    const right: string[] = [];
-
-    lines.forEach(line => {
-      const l = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
-      const r = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
-      if (l.trim()) left.push(l.trim());
-      if (r.trim()) right.push(r.trim());
-    });
-    return { left, right };
-  };
-
-  const parseColumn = (lines: string[]) => {
-    const results: any[] = [];
-    let buffer = '';
-
-    for (let line of lines) {
-      // Corrige falha comum de OCR onde o número fica isolado (Ex: "12 \n - Tráfego")
-      line = line.replace(/(\d{1,2})\s*$/, '$1 -'); 
-      buffer += ' ' + line;
-
-      // Regex estruturada: Encontra "Num - Nome Fase Grau"
-      const itemRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*(.+?)\s*(?:(PR)|(RC|RM|RO|--)\s*[\/\-]?\s*([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(RC|RM|RO|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?=\s|$|\s(?:0?[1-9]|[1-5][0-9])\s*[-–—])/gi;
-      
-      let match;
-      let lastIndex = 0;
-      while ((match = itemRegex.exec(buffer)) !== null) {
-        const numero = match[1];
-        const nome = match[2].trim().replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '');
-        let fase = '--';
-        let grau = '';
-
-        if (match[3]) fase = 'PR';
-        else if (match[4]) { fase = match[4].toUpperCase(); grau = match[5].toUpperCase(); }
-        else if (match[6]) { fase = match[6].toUpperCase(); }
-        else if (match[7]) { grau = match[7].toUpperCase(); }
-
-        if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grau.replace(/\s+/g, ''))) grau = '';
-
-        results.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
-        lastIndex = itemRegex.lastIndex;
-      }
-      
-      buffer = buffer.substring(lastIndex).trim(); // Mantém pedaços não processados para a próxima linha
-    }
-    return results;
-  };
-
-  const extractAfetivos = (fullText: string) => {
-    const results: any[] = [];
-    const idxAfetivos = fullText.search(/Itens Afetivos/i);
-    const idxComentarios = fullText.search(/Comentários:/i);
-    
-    if (idxAfetivos !== -1) {
-      const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
-      const regex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
-      let match;
-      while ((match = regex.exec(section)) !== null) {
-        let nome = match[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
-        let grau = match[2].toUpperCase().replace(/\s+/g, '');
-        if (nome.length > 3 && !/^\d/.test(nome)) {
-            results.push({ id: crypto.randomUUID(), numero: '', nome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grau) ? '' : grau, comentario: '' });
-        }
-      }
-    }
-    return results;
-  };
-
-  const extractComments = (fullText: string) => {
-    const results: any[] = [];
-    const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
-    
-    const matches = [];
-    let match;
-    while ((match = commentRegex.exec(fullText)) !== null) {
-      matches.push({
-        index: match.index,
-        length: match[0].length,
-        numero: match[1].trim(),
-        nome: match[2].trim(),
-        insideParens: match[3] ? match[3].toUpperCase() : ''
-      });
-    }
-
-    for (let i = 0; i < matches.length; i++) {
-      const current = matches[i];
-      const start = current.index + current.length;
-      let end = i + 1 < matches.length ? matches[i+1].index : fullText.length;
-
-      const assIdx = fullText.indexOf('Ass. Digital', start);
-      const recIdx = fullText.indexOf('Recomendações/Parecer:', start);
-      if (assIdx !== -1 && assIdx < end) end = assIdx;
-      if (recIdx !== -1 && recIdx < end) end = recIdx;
-
-      const comentario = fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-
-      let fase = '--';
-      let grau = '';
-      
-      if (current.insideParens) {
-        if (current.insideParens.includes('/')) {
-            const parts = current.insideParens.split('/');
-            fase = parts[0].trim() || '--';
-            grau = parts[1].trim();
-        } else if (current.insideParens === 'PR') {
-            fase = 'PR';
-        } else if (/^[1-6]$/.test(current.insideParens)) {
-            grau = current.insideParens;
-        } else {
-            fase = current.insideParens;
-        }
-      }
-      
-      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grau.replace(/\s+/g, ''))) grau = '';
-
-      results.push({ numero: current.numero, nome: current.nome, fase, grau, comentario });
-    }
-    return results;
-  };
-
-  const similarity = (a: string, b: string) => {
-    a = normalizeStringForMatch(a);
-    b = normalizeStringForMatch(b);
-    if (a.includes(b) || b.includes(a)) return 1;
-    
-    let score = 0;
-    const wordsA = a.split(' ').filter(w => w.length > 2);
-    const wordsB = b.split(' ').filter(w => w.length > 2);
-    
-    if (wordsA.length === 0 || wordsB.length === 0) return 0;
-    
-    wordsA.forEach(w => { if (wordsB.includes(w)) score++; });
-    return score / Math.max(wordsA.length, wordsB.length);
-  };
-
-  const mergeData = (items: any[], comments: any[]) => {
-    const finalItems = [...items]; 
-
-    comments.forEach(c => {
-      // 1. Match perfeito por número
-      let target = finalItems.find(it => it.numero === c.numero);
-
-      // 2. Fallback Inteligente (BIZU)
-      if (!target) {
-        const bestMatch = finalItems
-            .map(it => ({ it, score: similarity(it.nome, c.nome) }))
-            .sort((a, b) => b.score - a.score)[0];
-
-        if (bestMatch && bestMatch.score > 0.4) target = bestMatch.it;
-      }
-
-      if (target) {
-        target.comentario = c.comentario || target.comentario;
-        if (c.fase !== '--' && c.fase) target.fase = c.fase;
-        if (c.grau) target.grau = c.grau;
-        if (!target.numero) target.numero = c.numero; // Puxa número para itens afetivos
-      } else {
-        // Item existia nos comentários mas não na tabela
-        finalItems.push({
-            id: crypto.randomUUID(),
-            numero: c.numero,
-            nome: c.nome,
-            fase: c.fase || '--',
-            grau: c.grau || '',
-            comentario: c.comentario
-        });
-      }
-    });
-
-    return finalItems
-        .filter(i => i.nome.length > 2 && !/esquadrão/i.test(i.nome)) // Limpa ruídos residuais
-        .sort((a, b) => {
-            const numA = parseInt(a.numero);
-            const numB = parseInt(b.numero);
-            if (isNaN(numA) && isNaN(numB)) return 0;
-            if (isNaN(numA)) return 1; 
-            if (isNaN(numB)) return -1;
-            return numA - numB;
-        });
   };
 
   const handleFileUpload = async (e: any) => {
@@ -395,13 +213,13 @@ export default function App() {
     setErrorMsg('');
 
     if (file.type !== 'application/pdf') {
-      setErrorMsg('Por favor, selecione um PDF válido.');
+      setErrorMsg('Por favor, selecione um arquivo PDF válido.');
       setStatus('idle');
       return;
     }
 
     if (!window.pdfjsLib) {
-      setErrorMsg('A biblioteca PDF.js não foi carregada.');
+      setErrorMsg('A biblioteca PDF.js não carregou corretamente. Recarregue a página.');
       setStatus('idle');
       return;
     }
@@ -409,29 +227,21 @@ export default function App() {
     try {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-
-      const rawItems: any[] = [];
       let fullText = '';
 
+      // Extrai o texto puro de todas as páginas para enviar para a IA
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // Puxa os dados brutos com posições X e Y para a Tabela
-        rawItems.push(...textContent.items.map((it: any) => ({
-          text: it.str.trim(),
-          x: it.transform[4],
-          y: it.transform[5]
-        })));
-
-        // Cria o fullText clássico para ler Cabeçalho e Comentários
-        let sortedForText = [...textContent.items].sort((a, b) => {
+        // Ordenação visual básica para facilitar a leitura da IA
+        let sortedItems = [...textContent.items].sort((a, b) => {
           if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
           return a.transform[4] - b.transform[4];
         });
         
         let lastY = null;
-        for (const it of sortedForText) {
+        for (const it of sortedItems) {
            if (lastY !== null && Math.abs(it.transform[5] - lastY) > 5) fullText += '\n';
            else if (lastY !== null) fullText += ' ';
            fullText += it.str;
@@ -440,19 +250,18 @@ export default function App() {
         fullText += '\n\n';
       }
 
-      // Dispara a nova arquitetura do BIZU.pdf
-      processStructuredData(rawItems, fullText);
+      await processWithAI(fullText);
 
     } catch (err) {
       console.error(err);
-      setErrorMsg('Erro fatal ao processar o arquivo PDF.');
+      setErrorMsg('Erro ao ler o documento PDF.');
       setStatus('idle');
     }
   };
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '', grau: '', comentario: '' }]);
+  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '--', grau: '', comentario: '' }]);
 
   const buildPayload = () => items.map(item => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
 
@@ -474,7 +283,7 @@ export default function App() {
     } catch { setModalState('error'); setModalMessage('Erro na rede. Tente exportar o CSV.'); }
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); } };
+  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
@@ -490,15 +299,18 @@ export default function App() {
       <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
         <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center gap-5">
           <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-          <div><h1 className="text-3xl font-bold tracking-tight">Extrator de Fichas (EIA)</h1><p className="text-slate-500 text-lg">Tratamento inteligente de dados de instrução.</p></div>
+          <div><h1 className="text-3xl font-bold tracking-tight">Extrator com Inteligência Artificial</h1><p className="text-slate-500 text-lg">Processamento avançado de dados de instrução.</p></div>
         </header>
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
+        
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Envie o arquivo PDF original. O sistema analisa tabelas superiores, afetivos e comentários automaticamente.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">O documento será analisado pelo Google Gemini para estruturação automática de dados e comentários.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
+        
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Analisando Estrutura</h2><p className="text-slate-500">Separando colunas fisicamente, extraindo dados e aplicando IA de similaridade...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Processamento IA Ativo</h2><p className="text-slate-500 mt-2">Enviando texto para análise e reconstrução de contexto...</p></div>
         )}
+        
         {status === 'reviewing' && (
           <div className="space-y-6">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
@@ -519,32 +331,33 @@ export default function App() {
               </div>
               <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Visão geral do despacho final..." /></div>
             </div>
+            
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> {items.length} Itens Extraídos e Vinculados</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> {items.length} Itens Identificados</h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Voltar / Cancelar</button>
+                  <button onClick={() => { setStatus('idle'); setItems([]); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Cancelar</button>
                   <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
                   <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Enviar Banco de Dados</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px]">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Nº</th><th className="p-3">Nome da Manobra / Item</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Comentário Vinculado</th><th className="p-3 w-12 text-center"></th></tr></thead>
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Nº</th><th className="p-3">Nome da Manobra / Item</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Comentário Estruturado</th><th className="p-3 w-12 text-center"></th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
                         <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Nome do item manual..." /></td>
+                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
                         <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar comentário..." /></td>
+                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Comentário..." /></td>
                         <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Adicionar Item Manual</button></div>
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Adicionar Manualmente</button></div>
               </div>
             </div>
           </div>
