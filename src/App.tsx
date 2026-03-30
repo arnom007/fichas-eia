@@ -70,12 +70,10 @@ export default function App() {
     setMeta(prev => { const newMeta = { ...prev, [field]: value }; if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) newMeta.grauMissao = ''; return newMeta; });
   };
 
-  // ============================================================================
-  // MOTOR DE PARSING LOCAL BIZU (0% IA, 100% VELOCIDADE)
-  // ============================================================================
-
-  const extractMetadata = (text: string) => {
-    const cleanHeader = text.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+  const processStructuredData = (rawItems: any[], fullText: string) => {
+    
+    // 1. Extrair Metadados
+    const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     let tipoMissaoDetectado = 'Normal';
     if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
@@ -96,20 +94,16 @@ export default function App() {
       pousos: cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i)?.[1] || '',
       grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : (matchGrauMissao ? matchGrauMissao[1] : ''),
       tipoMissao: tipoMissaoDetectado, hdep, tev,
-      parecer: (text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
+      parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
-  };
 
-  const processStructuredData = (rawItems: any[], fullText: string) => {
-    extractMetadata(fullText);
-
-    // 1. Normaliza e agrupa linhas (Eixo Y)
+    // 2. Normaliza e agrupa linhas (Eixo Y) para formar a Tabela
     const normalized = rawItems.map(i => ({ text: i.text.trim(), x: i.x, y: Math.round(i.y / 5) * 5 })).filter(i => i.text.length > 0);
     const mapY = new Map<number, any[]>();
     normalized.forEach(i => { if (!mapY.has(i.y)) mapY.set(i.y, []); mapY.get(i.y)!.push(i); });
     const lines = Array.from(mapY.entries()).sort((a, b) => b[0] - a[0]).map(([_, line]) => line.sort((a, b) => a.x - b.x));
 
-    // 2. Separa colunas Esquerda/Direita (Eixo X)
+    // 3. Separa colunas Esquerda/Direita (Eixo X)
     const LEFT_LIMIT = 300;
     const leftLines: string[] = [];
     const rightLines: string[] = [];
@@ -120,12 +114,12 @@ export default function App() {
       if (right.trim()) rightLines.push(right.trim());
     });
 
-    // 3. Parse das colunas (Tabela)
+    // 4. Parse das colunas 
     const parseColumn = (colLines: string[]) => {
       const results: any[] = [];
       let buffer = '';
       for (let line of colLines) {
-        line = line.replace(/(\d{1,2})\s*$/, '$1 -'); // Junta números órfãos
+        line = line.replace(/(\d{1,2})\s*$/, '$1 -'); 
         buffer += ' ' + line;
         const regex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*(.+?)\s*(?:(PR)|(RC|RM|RO|--)\s*[\/\-]?\s*([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(RC|RM|RO|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?=\s|$|\s(?:0?[1-9]|[1-5][0-9])\s*[-–—])/gi;
         let match;
@@ -151,11 +145,25 @@ export default function App() {
     [...parseColumn(leftLines), ...parseColumn(rightLines)].forEach(it => tableItemsMap.set(it.numero, it));
     const tableItems = Array.from(tableItemsMap.values());
 
-    // 4. Afetivos e Comentários (A grande sacada)
+    // 5. Afetivos e Comentários 
     const comments: any[] = [];
     const afetivos: any[] = [];
     
-    // Puxa comentários e afetivos com regex forte
+    const idxAfetivos = fullText.search(/Itens Afetivos/i);
+    const idxComentarios = fullText.search(/Comentários:/i);
+    if (idxAfetivos !== -1) {
+      const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
+      const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
+      let matchA;
+      while ((matchA = afetivoRegex.exec(section)) !== null) {
+        let nomeA = matchA[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
+        let grauA = matchA[2].toUpperCase().replace(/\s+/g, '');
+        if (nomeA.length > 3 && !/^\d/.test(nomeA)) {
+            afetivos.push({ id: crypto.randomUUID(), numero: '', nome: nomeA, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
+        }
+      }
+    }
+
     const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
     const matches = [];
     let matchC;
@@ -184,7 +192,7 @@ export default function App() {
       comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() });
     }
 
-    // 5. Merge Inteligente de Levenshtein
+    // 6. Merge Inteligente (Levenstein)
     const similarity = (a: string, b: string) => {
       a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
       b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -194,7 +202,7 @@ export default function App() {
       wordsA.forEach(w => { if (wordsB.includes(w)) score++; }); return score / Math.max(wordsA.length, wordsB.length);
     };
 
-    const finalItems = [...tableItems]; 
+    const finalItems = [...tableItems, ...afetivos]; 
     comments.forEach(c => {
       let target = finalItems.find(it => it.numero === c.numero);
       if (!target) {
@@ -211,7 +219,9 @@ export default function App() {
       }
     });
 
-    const cleanResults = finalItems.filter(i => i.nome.length > 2 && !/esquadrão/i.test(i.nome)).sort((a, b) => parseInt(a.numero) - parseInt(b.numero));
+    const cleanResults = finalItems
+      .filter(i => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
+      .sort((a, b) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
     if (cleanResults.length > 0) { setItems(cleanResults); setStatus('reviewing'); setErrorMsg(''); } 
     else { setErrorMsg('Não foi possível extrair dados estruturados.'); setStatus('idle'); }
