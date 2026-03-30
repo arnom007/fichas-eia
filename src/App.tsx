@@ -48,10 +48,28 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 // ARQUITETURA DEFINITIVA: MÉTODOS DE EXTRAÇÃO ESPACIAL
 // ---------------------------------------------------------------------------------
 
+const classifyToken = (text: string) => {
+  if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
+  if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
+  if (/^[1-6]$/.test(text)) return 'grau';
+  // Reconhece números mesmo colados com traço ex: "1-"
+  if (/^\d{1,3}[-–—.:]?$/.test(text)) return 'numero'; 
+  // Reconhece combo encavalado ex: "RM/5"
+  if (/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i.test(text)) return 'fase_grau';
+  return 'texto';
+};
+
 const detectColumns = (lines: any[][]) => {
   const xs: number[] = [];
-  lines.forEach((l: any[]) => l.forEach((t: any) => xs.push(t.x)));
-  if (xs.length === 0) return { fase: 999, grau: 999 };
+  lines.forEach((l: any[]) => l.forEach((t: any) => {
+    // Filtra os eixos X somente dos tokens que são notas ou fases (âncoras seguras)
+    const type = classifyToken(t.text.replace(/^(\d{1,3})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2').split(/\s+/)[0]);
+    if (type === 'fase' || type === 'grau' || type === 'fase_grau') {
+      xs.push(t.x);
+    }
+  }));
+  
+  if (xs.length === 0) return { fase: 9999, grau: 9999 };
 
   xs.sort((a: number, b: number) => a - b);
   const clusters: number[][] = [];
@@ -71,9 +89,8 @@ const detectColumns = (lines: any[][]) => {
   const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
 
   return {
-    nome: centers[0] || 0,
-    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : 999,
-    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 999
+    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : (centers.length === 1 ? centers[0] - 30 : 9999),
+    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 9999
   };
 };
 
@@ -95,7 +112,8 @@ const mergeBrokenLines = (lines: any[][]) => {
     const line = lines[i];
     const firstText = line[0]?.text || '';
     
-    if (!/^\d{1,3}/.test(firstText) && merged.length > 0) {
+    // Agora aceita que a linha comece com "1 - " ou "10Tráfego"
+    if (!/^\s*\d{1,3}[-–—.:]?\b/.test(firstText) && merged.length > 0) {
       merged[merged.length - 1].push(...line);
       merged[merged.length - 1].sort((a: any, b: any) => a.x - b.x); 
     } else {
@@ -115,28 +133,32 @@ const extractItemsFromLines = (lines: any[][], columns: any) => {
     let grau = '';
 
     line.forEach((token: any) => {
-      const cleanText = token.text.replace(/^(\d{1,3})([A-Za-zÀ-ÿ])/i, '$1 $2');
+      // Separa strings grudadas tipo "10Tráfego"
+      const cleanText = token.text.replace(/^(\d{1,3})[-–—.:]?\s*([A-Za-zÀ-ÿ])/i, '$1 $2');
       const subTokens = cleanText.split(/\s+/);
 
       subTokens.forEach((subText: string) => {
-        // Checagem robusta para encavalamento de Fase e Grau (ex: RM/5, RO-4, RC5)
-        const pgMatch = subText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)?$/i);
-        
-        if (pgMatch) {
-          fase = pgMatch[1].toUpperCase();
-          if (pgMatch[2]) grau = pgMatch[2].toUpperCase();
-        } 
-        else if (/^[1-6]$/.test(subText)) {
-          grau = subText;
-        } 
-        else if (/^\d{1,3}$/.test(subText) && !numero) {
-          numero = subText;
-        } 
-        else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
-          // Filtro espacial: só adiciona ao nome se estiver fisicamente antes da coluna de Fase
-          const limitX = columns.fase !== 999 ? columns.fase + 20 : (columns.grau !== 999 ? columns.grau + 20 : 9999);
-          if (token.x < limitX) {
-            nome += (nome ? ' ' : '') + subText;
+        const type = classifyToken(subText);
+
+        if (type === 'fase_grau') {
+          const pgMatch = subText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
+          if (pgMatch) {
+            fase = pgMatch[1].toUpperCase();
+            grau = pgMatch[2].toUpperCase();
+          }
+        } else if (type === 'fase') {
+          fase = subText.toUpperCase();
+        } else if (type === 'grau') {
+          grau = subText.toUpperCase();
+        } else if (type === 'numero' && !numero) {
+          numero = subText.replace(/[-–—.:]/g, ''); // Limpa o traço do número
+        } else if (type === 'texto' || type === 'ignore') {
+          if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
+            // Bloqueio Espacial: Só adiciona ao nome se estiver à esquerda da Fase/Grau
+            const limitX = Math.min(columns.fase, columns.grau);
+            if (token.x < limitX + 20) {
+              nome += (nome ? ' ' : '') + subText;
+            }
           }
         }
       });
@@ -144,7 +166,8 @@ const extractItemsFromLines = (lines: any[][], columns: any) => {
 
     nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
 
-    if (numero && nome.length > 2) {
+    // Com o bug do traço resolvido, agora TODOS os itens passarão nesse if
+    if (numero && nome.length >= 2) {
       items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
     }
   });
@@ -238,7 +261,7 @@ export default function App() {
     const leftCols = detectColumns(leftMerged);
     const rightCols = detectColumns(rightMerged);
 
-    // EXTRAI A TABELA PERFEITA (COM OU SEM COMENTÁRIOS)
+    // EXTRAI A TABELA COMPLETA (ITENS COM E SEM COMENTÁRIO)
     const tableItems = [
       ...extractItemsFromLines(leftMerged, leftCols),
       ...extractItemsFromLines(rightMerged, rightCols)
@@ -251,10 +274,10 @@ export default function App() {
     if (idxAfetivos !== -1) {
       const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
       const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
-      let afetivoMatch;
-      while ((afetivoMatch = afetivoRegex.exec(section)) !== null) {
-        let nomeA = afetivoMatch[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
-        let grauA = afetivoMatch[2].toUpperCase().replace(/\s+/g, '');
+      let matchA;
+      while ((matchA = afetivoRegex.exec(section)) !== null) {
+        let nomeA = matchA[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
+        let grauA = matchA[2].toUpperCase().replace(/\s+/g, '');
         if (nomeA.length > 3 && !/^\d/.test(nomeA)) {
             afetivos.push({ id: crypto.randomUUID(), numero: '', nome: nomeA, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
         }
@@ -349,7 +372,6 @@ export default function App() {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // Offset de página impede que a página 1 e 2 se fundam caso o Y se repita
         const pageOffsetY = (pdf.numPages - i) * 3000; 
 
         rawItems.push(...textContent.items.map((it: any) => ({ 
