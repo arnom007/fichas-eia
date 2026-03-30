@@ -45,29 +45,31 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 );
 
 // ---------------------------------------------------------------------------------
-// ARQUITETURA DEFINITIVA: MÉTODOS DE EXTRAÇÃO ESPACIAL
+// ARQUITETURA DEFINITIVA: MÉTODOS DE EXTRAÇÃO ESPACIAL E TOKENS
 // ---------------------------------------------------------------------------------
 
 const classifyToken = (text: string) => {
   if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
   if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
   if (/^[1-6]$/.test(text)) return 'grau';
-  // Reconhece números mesmo colados com traço ex: "1-"
   if (/^\d{1,3}[-–—.:]?$/.test(text)) return 'numero'; 
-  // Reconhece combo encavalado ex: "RM/5"
   if (/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i.test(text)) return 'fase_grau';
   return 'texto';
 };
 
 const detectColumns = (lines: any[][]) => {
   const xs: number[] = [];
-  lines.forEach((l: any[]) => l.forEach((t: any) => {
-    // Filtra os eixos X somente dos tokens que são notas ou fases (âncoras seguras)
-    const type = classifyToken(t.text.replace(/^(\d{1,3})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2').split(/\s+/)[0]);
-    if (type === 'fase' || type === 'grau' || type === 'fase_grau') {
-      xs.push(t.x);
-    }
-  }));
+  
+  // Analisa apenas o final de cada linha para evitar Falsos Positivos de siglas no meio do texto
+  lines.forEach((l: any[]) => {
+    const lastTokens = l.slice(-3);
+    lastTokens.forEach((t: any) => {
+      const type = classifyToken(t.text.replace(/^(\d{1,3})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2').split(/\s+/)[0]);
+      if (type === 'fase' || type === 'grau' || type === 'fase_grau') {
+        xs.push(t.x);
+      }
+    });
+  });
   
   if (xs.length === 0) return { fase: 9999, grau: 9999 };
 
@@ -88,8 +90,9 @@ const detectColumns = (lines: any[][]) => {
 
   const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
 
+  // Se tem só 1 cluster, provavelmente a coluna não tem notas, só "PR" ou só Grau (ex: Pré-solo)
   return {
-    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : (centers.length === 1 ? centers[0] - 30 : 9999),
+    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : (centers.length === 1 ? centers[0] - 15 : 9999),
     grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 9999
   };
 };
@@ -97,7 +100,8 @@ const detectColumns = (lines: any[][]) => {
 const buildLines = (items: any[]) => {
   const map = new Map<number, any[]>();
   items.forEach((i: any) => {
-    const y = Math.round(i.y / 4) * 4; 
+    // Aumentamos a tolerância de alinhamento vertical para 6 (ajuda em linhas um pouco tortas)
+    const y = Math.round(i.y / 6) * 6; 
     if (!map.has(y)) map.set(y, []);
     map.get(y)!.push(i);
   });
@@ -112,8 +116,10 @@ const mergeBrokenLines = (lines: any[][]) => {
     const line = lines[i];
     const firstText = line[0]?.text || '';
     
-    // Agora aceita que a linha comece com "1 - " ou "10Tráfego"
-    if (!/^\s*\d{1,3}[-–—.:]?\b/.test(firstText) && merged.length > 0) {
+    // Identifica se a linha atual DEVE ser o começo de um item (Tem número na ponta)
+    const startsWithNum = /^\s*\d{1,3}[-–—.:]?\b/.test(firstText) || classifyToken(firstText) === 'numero';
+    
+    if (!startsWithNum && merged.length > 0) {
       merged[merged.length - 1].push(...line);
       merged[merged.length - 1].sort((a: any, b: any) => a.x - b.x); 
     } else {
@@ -125,6 +131,8 @@ const mergeBrokenLines = (lines: any[][]) => {
 
 const extractItemsFromLines = (lines: any[][], columns: any) => {
   const items: any[] = [];
+  // Define o limite a partir de onde a gente passa a considerar Tokens como Notas/Fases
+  const limitX = Math.min(columns.fase, columns.grau);
   
   lines.forEach((line: any[]) => {
     let numero = '';
@@ -133,40 +141,34 @@ const extractItemsFromLines = (lines: any[][], columns: any) => {
     let grau = '';
 
     line.forEach((token: any) => {
-      // Separa strings grudadas tipo "10Tráfego"
-      const cleanText = token.text.replace(/^(\d{1,3})[-–—.:]?\s*([A-Za-zÀ-ÿ])/i, '$1 $2');
+      const cleanText = token.text.replace(/^(\d{1,3})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2');
       const subTokens = cleanText.split(/\s+/);
 
       subTokens.forEach((subText: string) => {
         const type = classifyToken(subText);
+        // Só aceita que é Fase/Grau se estiver fisicamente na margem direita
+        const isFarRight = token.x >= limitX - 40; 
 
-        if (type === 'fase_grau') {
+        if (type === 'fase_grau' && isFarRight) {
           const pgMatch = subText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
           if (pgMatch) {
             fase = pgMatch[1].toUpperCase();
-            grau = pgMatch[2].toUpperCase();
+            if (pgMatch[2]) grau = pgMatch[2].toUpperCase();
           }
-        } else if (type === 'fase') {
+        } else if (type === 'fase' && isFarRight) {
           fase = subText.toUpperCase();
-        } else if (type === 'grau') {
+        } else if (type === 'grau' && isFarRight) {
           grau = subText.toUpperCase();
         } else if (type === 'numero' && !numero) {
-          numero = subText.replace(/[-–—.:]/g, ''); // Limpa o traço do número
-        } else if (type === 'texto' || type === 'ignore') {
-          if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
-            // Bloqueio Espacial: Só adiciona ao nome se estiver à esquerda da Fase/Grau
-            const limitX = Math.min(columns.fase, columns.grau);
-            if (token.x < limitX + 20) {
-              nome += (nome ? ' ' : '') + subText;
-            }
-          }
+          numero = subText.replace(/[-–—.:]/g, ''); 
+        } else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
+          nome += (nome ? ' ' : '') + subText;
         }
       });
     });
 
     nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
 
-    // Com o bug do traço resolvido, agora TODOS os itens passarão nesse if
     if (numero && nome.length >= 2) {
       items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
     }
