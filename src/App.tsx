@@ -50,16 +50,16 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 
 const detectColumns = (lines: any[][]) => {
   const xs: number[] = [];
-  lines.forEach(l => l.forEach(t => xs.push(t.x)));
+  lines.forEach((l: any[]) => l.forEach((t: any) => xs.push(t.x)));
   if (xs.length === 0) return { fase: 999, grau: 999 };
 
-  xs.sort((a, b) => a - b);
+  xs.sort((a: number, b: number) => a - b);
   const clusters: number[][] = [];
   
-  xs.forEach(x => {
+  xs.forEach((x: number) => {
     let found = false;
     for (let c of clusters) {
-      if (Math.abs(c[0] - x) < 35) { // Tolerância de 35px para considerar a mesma coluna
+      if (Math.abs(c[0] - x) < 35) { // Tolerância de 35px
         c.push(x);
         found = true;
         break;
@@ -68,7 +68,7 @@ const detectColumns = (lines: any[][]) => {
     if (!found) clusters.push([x]);
   });
 
-  const centers = clusters.map(c => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
+  const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
 
   return {
     nome: centers[0] || 0,
@@ -79,14 +79,14 @@ const detectColumns = (lines: any[][]) => {
 
 const buildLines = (items: any[]) => {
   const map = new Map<number, any[]>();
-  items.forEach(i => {
-    const y = Math.round(i.y / 4) * 4; // Agrupa palavras na mesma linha real
+  items.forEach((i: any) => {
+    const y = Math.round(i.y / 4) * 4; 
     if (!map.has(y)) map.set(y, []);
     map.get(y)!.push(i);
   });
   return Array.from(map.entries())
-    .sort((a, b) => b[0] - a[0]) // Decrescente para manter a ordem da página
-    .map(([_, line]) => line.sort((a, b) => a.x - b.x));
+    .sort((a, b) => b[0] - a[0]) 
+    .map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
 };
 
 const classifyToken = (text: string) => {
@@ -103,7 +103,6 @@ const mergeBrokenLines = (lines: any[][]) => {
     const line = lines[i];
     const firstText = line[0]?.text || '';
     
-    // Se não inicia com número e já existe uma linha anterior, é uma quebra do nome da manobra
     if (!/^\d{1,3}/.test(firstText) && merged.length > 0) {
       merged[merged.length - 1].push(...line);
       merged[merged.length - 1].sort((a: any, b: any) => a.x - b.x); 
@@ -117,21 +116,20 @@ const mergeBrokenLines = (lines: any[][]) => {
 const extractItemsFromLines = (lines: any[][], columns: any) => {
   const items: any[] = [];
   
-  lines.forEach(line => {
+  lines.forEach((line: any[]) => {
     let numero = '';
     let nome = '';
     let fase = '--';
     let grau = '';
 
-    line.forEach(token => {
-      // Separa strings grudadas tipo "10Tráfego"
+    line.forEach((token: any) => {
       const cleanText = token.text.replace(/^(\d{1,3})([A-Za-zÀ-ÿ])/, '$1 $2');
       const subTokens = cleanText.split(' ');
 
-      subTokens.forEach(subText => {
+      // CORREÇÃO: Adicionada a tipagem ': string' no subText para o TS não reclamar
+      subTokens.forEach((subText: string) => {
         const type = classifyToken(subText);
 
-        // CLASSIFICAÇÃO POR POSIÇÃO + TIPO (O Pulo do Gato)
         if (type === 'fase') {
           fase = subText.toUpperCase();
         } else if (type === 'grau') {
@@ -214,15 +212,14 @@ export default function App() {
     }));
 
     // ISOLAR A TABELA DE MANOBRAS E APLICAR OS MÉTODOS DO ALUNO
-    const normalized = rawItems.map(i => ({ text: i.text.trim(), x: i.x, y: i.y })).filter(i => i.text.length > 0);
+    const normalized = rawItems.map((i: any) => ({ text: i.text.trim(), x: i.x, y: i.y })).filter((i: any) => i.text.length > 0);
     const allLines = buildLines(normalized);
 
     let tableLines: any[][] = [];
     let isTable = false;
 
-    // Filtro cirúrgico: Aplica os métodos avançados SÓ na área da tabela de notas
-    allLines.forEach(line => {
-      const text = line.map(t => t.text).join(' ');
+    allLines.forEach((line: any[]) => {
+      const text = line.map((t: any) => t.text).join(' ');
       if (/\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) isTable = true;
       if (/Itens Afetivos/i.test(text) || /Comentários:/i.test(text)) isTable = false;
       if (isTable) tableLines.push(line);
@@ -230,9 +227,9 @@ export default function App() {
 
     const leftLines: any[][] = [];
     const rightLines: any[][] = [];
-    tableLines.forEach(line => {
-      const left = line.filter(t => t.x < 300);
-      const right = line.filter(t => t.x >= 300);
+    tableLines.forEach((line: any[]) => {
+      const left = line.filter((t: any) => t.x < 300);
+      const right = line.filter((t: any) => t.x >= 300);
       if (left.length > 0) leftLines.push(left);
       if (right.length > 0) rightLines.push(right);
     });
@@ -268,10 +265,11 @@ export default function App() {
     // EXTRAÇÃO DE COMENTÁRIOS
     const comments: any[] = [];
     const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
-    const matches = [];
+    const matches: any[] = [];
     let matchC;
     while ((matchC = commentRegex.exec(fullText)) !== null) {
-      matches.push({ index: matchC.index, length: matchC[0].length, numero: matchC[1].trim(), nome: matchC[2].trim(), insideParens: matchC[3] ? match[3].toUpperCase() : '' });
+      // CORREÇÃO: matchC[3] no lugar do match[3] que estava dando erro
+      matches.push({ index: matchC.index, length: matchC[0].length, numero: matchC[1].trim(), nome: matchC[2].trim(), insideParens: matchC[3] ? matchC[3].toUpperCase() : '' });
     }
 
     for (let i = 0; i < matches.length; i++) {
@@ -306,10 +304,10 @@ export default function App() {
     };
 
     const finalItems = [...tableItems, ...afetivos]; 
-    comments.forEach(c => {
-      let target = finalItems.find(it => it.numero === c.numero);
+    comments.forEach((c: any) => {
+      let target = finalItems.find((it: any) => it.numero === c.numero);
       if (!target) {
-        const bestMatch = finalItems.map(it => ({ it, score: similarity(it.nome, c.nome) })).sort((a, b) => b.score - a.score)[0];
+        const bestMatch = finalItems.map((it: any) => ({ it, score: similarity(it.nome, c.nome) })).sort((a: any, b: any) => b.score - a.score)[0];
         if (bestMatch && bestMatch.score > 0.4) target = bestMatch.it;
       }
       if (target) {
@@ -323,8 +321,8 @@ export default function App() {
     });
 
     const cleanResults = finalItems
-      .filter(i => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
-      .sort((a, b) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
+      .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
+      .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
     if (cleanResults.length > 0) { setItems(cleanResults); setStatus('reviewing'); setErrorMsg(''); } 
     else { setErrorMsg('Não foi possível extrair dados estruturados.'); setStatus('idle'); }
@@ -346,7 +344,6 @@ export default function App() {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         
-        // O offset de página impede que a página 1 e 2 se fundam caso o Y se repita
         const pageOffsetY = (pdf.numPages - i) * 3000; 
 
         rawItems.push(...textContent.items.map((it: any) => ({ 
@@ -355,7 +352,7 @@ export default function App() {
           y: it.transform[5] + pageOffsetY 
         })));
         
-        let sortedForText = [...textContent.items].sort((a, b) => {
+        let sortedForText = [...textContent.items].sort((a: any, b: any) => {
           if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
           return a.transform[4] - b.transform[4];
         });
@@ -376,7 +373,7 @@ export default function App() {
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
   const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item', fase: '--', grau: '', comentario: '' }]);
 
-  const buildPayload = () => items.map(item => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
+  const buildPayload = () => items.map((item: any) => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
 
   const exportCSV = () => {
     const hdrs = ['Data', 'Esquadrilha', 'Missão', 'Grau Missão', '1P / AL', 'IN', 'Fase Missão', 'Anv', 'H.Dep', 'Pousos', 'TEV', 'Parecer', 'Nº Item', 'Nome', 'Fase Item', 'Grau/Menção', 'Comentário', 'Tipo'];
