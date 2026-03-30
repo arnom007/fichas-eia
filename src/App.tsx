@@ -44,6 +44,122 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
   </div>
 );
 
+// ---------------------------------------------------------------------------------
+// ARQUITETURA DO ALUNO: MÉTODOS DE EXTRAÇÃO ESPACIAL
+// ---------------------------------------------------------------------------------
+
+const detectColumns = (lines: any[][]) => {
+  const xs: number[] = [];
+  lines.forEach(l => l.forEach(t => xs.push(t.x)));
+  if (xs.length === 0) return { fase: 999, grau: 999 };
+
+  xs.sort((a, b) => a - b);
+  const clusters: number[][] = [];
+  
+  xs.forEach(x => {
+    let found = false;
+    for (let c of clusters) {
+      if (Math.abs(c[0] - x) < 35) { // Tolerância de 35px para considerar a mesma coluna
+        c.push(x);
+        found = true;
+        break;
+      }
+    }
+    if (!found) clusters.push([x]);
+  });
+
+  const centers = clusters.map(c => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
+
+  return {
+    nome: centers[0] || 0,
+    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : 999,
+    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 999
+  };
+};
+
+const buildLines = (items: any[]) => {
+  const map = new Map<number, any[]>();
+  items.forEach(i => {
+    const y = Math.round(i.y / 4) * 4; // Agrupa palavras na mesma linha real
+    if (!map.has(y)) map.set(y, []);
+    map.get(y)!.push(i);
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => b[0] - a[0]) // Decrescente para manter a ordem da página
+    .map(([_, line]) => line.sort((a, b) => a.x - b.x));
+};
+
+const classifyToken = (text: string) => {
+  if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
+  if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
+  if (/^[1-6]$/.test(text)) return 'grau';
+  if (/^\d{1,3}$/.test(text)) return 'numero';
+  return 'texto';
+};
+
+const mergeBrokenLines = (lines: any[][]) => {
+  const merged: any[][] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const firstText = line[0]?.text || '';
+    
+    // Se não inicia com número e já existe uma linha anterior, é uma quebra do nome da manobra
+    if (!/^\d{1,3}/.test(firstText) && merged.length > 0) {
+      merged[merged.length - 1].push(...line);
+      merged[merged.length - 1].sort((a: any, b: any) => a.x - b.x); 
+    } else {
+      merged.push([...line]);
+    }
+  }
+  return merged;
+};
+
+const extractItemsFromLines = (lines: any[][], columns: any) => {
+  const items: any[] = [];
+  
+  lines.forEach(line => {
+    let numero = '';
+    let nome = '';
+    let fase = '--';
+    let grau = '';
+
+    line.forEach(token => {
+      // Separa strings grudadas tipo "10Tráfego"
+      const cleanText = token.text.replace(/^(\d{1,3})([A-Za-zÀ-ÿ])/, '$1 $2');
+      const subTokens = cleanText.split(' ');
+
+      subTokens.forEach(subText => {
+        const type = classifyToken(subText);
+
+        // CLASSIFICAÇÃO POR POSIÇÃO + TIPO (O Pulo do Gato)
+        if (type === 'fase') {
+          fase = subText.toUpperCase();
+        } else if (type === 'grau') {
+          grau = subText.toUpperCase();
+        } else if (type === 'numero' && !numero) {
+          numero = subText;
+        } else if (type === 'texto') {
+          if (token.x < columns.fase) {
+            nome += (nome ? ' ' : '') + subText;
+          }
+        }
+      });
+    });
+
+    nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+
+    if (numero && nome.length > 2) {
+      items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
+    }
+  });
+
+  return items;
+};
+
+// ---------------------------------------------------------------------------------
+// APLICAÇÃO PRINCIPAL
+// ---------------------------------------------------------------------------------
+
 export default function App() {
   const [status, setStatus] = useState('idle'); 
   const [items, setItems] = useState<any[]>([]);
@@ -72,7 +188,7 @@ export default function App() {
 
   const processStructuredData = (rawItems: any[], fullText: string) => {
     
-    // 1. Extrair Metadados
+    // EXTRAÇÃO DE METADADOS
     const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     let tipoMissaoDetectado = 'Normal';
@@ -97,58 +213,43 @@ export default function App() {
       parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
 
-    // 2. Normaliza e agrupa linhas (Eixo Y) para formar a Tabela
-    const normalized = rawItems.map(i => ({ text: i.text.trim(), x: i.x, y: Math.round(i.y / 5) * 5 })).filter(i => i.text.length > 0);
-    const mapY = new Map<number, any[]>();
-    normalized.forEach(i => { if (!mapY.has(i.y)) mapY.set(i.y, []); mapY.get(i.y)!.push(i); });
-    const lines = Array.from(mapY.entries()).sort((a, b) => b[0] - a[0]).map(([_, line]) => line.sort((a, b) => a.x - b.x));
+    // ISOLAR A TABELA DE MANOBRAS E APLICAR OS MÉTODOS DO ALUNO
+    const normalized = rawItems.map(i => ({ text: i.text.trim(), x: i.x, y: i.y })).filter(i => i.text.length > 0);
+    const allLines = buildLines(normalized);
 
-    // 3. Separa colunas Esquerda/Direita (Eixo X)
-    const LEFT_LIMIT = 300;
-    const leftLines: string[] = [];
-    const rightLines: string[] = [];
-    lines.forEach(line => {
-      const left = line.filter(i => i.x < LEFT_LIMIT).map(i => i.text).join(' ');
-      const right = line.filter(i => i.x >= LEFT_LIMIT).map(i => i.text).join(' ');
-      if (left.trim()) leftLines.push(left.trim());
-      if (right.trim()) rightLines.push(right.trim());
+    let tableLines: any[][] = [];
+    let isTable = false;
+
+    // Filtro cirúrgico: Aplica os métodos avançados SÓ na área da tabela de notas
+    allLines.forEach(line => {
+      const text = line.map(t => t.text).join(' ');
+      if (/\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) isTable = true;
+      if (/Itens Afetivos/i.test(text) || /Comentários:/i.test(text)) isTable = false;
+      if (isTable) tableLines.push(line);
     });
 
-    // 4. Parse das colunas 
-    const parseColumn = (colLines: string[]) => {
-      const results: any[] = [];
-      let buffer = '';
-      for (let line of colLines) {
-        line = line.replace(/(\d{1,2})\s*$/, '$1 -'); 
-        buffer += ' ' + line;
-        const regex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*(.+?)\s*(?:(PR)|(RC|RM|RO|--)\s*[\/\-]?\s*([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(RC|RM|RO|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?=\s|$|\s(?:0?[1-9]|[1-5][0-9])\s*[-–—])/gi;
-        let match;
-        let lastIndex = 0;
-        while ((match = regex.exec(buffer)) !== null) {
-          const numero = match[1];
-          const nome = match[2].trim().replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '');
-          let fase = '--', grau = '';
-          if (match[3]) fase = 'PR';
-          else if (match[4]) { fase = match[4].toUpperCase(); grau = match[5].toUpperCase(); }
-          else if (match[6]) fase = match[6].toUpperCase();
-          else if (match[7]) grau = match[7].toUpperCase();
-          if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grau.replace(/\s+/g, ''))) grau = '';
-          results.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
-          lastIndex = regex.lastIndex;
-        }
-        buffer = buffer.substring(lastIndex).trim();
-      }
-      return results;
-    };
+    const leftLines: any[][] = [];
+    const rightLines: any[][] = [];
+    tableLines.forEach(line => {
+      const left = line.filter(t => t.x < 300);
+      const right = line.filter(t => t.x >= 300);
+      if (left.length > 0) leftLines.push(left);
+      if (right.length > 0) rightLines.push(right);
+    });
 
-    const tableItemsMap = new Map();
-    [...parseColumn(leftLines), ...parseColumn(rightLines)].forEach(it => tableItemsMap.set(it.numero, it));
-    const tableItems = Array.from(tableItemsMap.values());
+    const leftMerged = mergeBrokenLines(leftLines);
+    const rightMerged = mergeBrokenLines(rightLines);
 
-    // 5. Afetivos e Comentários 
-    const comments: any[] = [];
+    const leftCols = detectColumns(leftMerged);
+    const rightCols = detectColumns(rightMerged);
+
+    const tableItems = [
+      ...extractItemsFromLines(leftMerged, leftCols),
+      ...extractItemsFromLines(rightMerged, rightCols)
+    ];
+
+    // EXTRAÇÃO DE ITENS AFETIVOS
     const afetivos: any[] = [];
-    
     const idxAfetivos = fullText.search(/Itens Afetivos/i);
     const idxComentarios = fullText.search(/Comentários:/i);
     if (idxAfetivos !== -1) {
@@ -164,6 +265,8 @@ export default function App() {
       }
     }
 
+    // EXTRAÇÃO DE COMENTÁRIOS
+    const comments: any[] = [];
     const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
     const matches = [];
     let matchC;
@@ -192,7 +295,7 @@ export default function App() {
       comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() });
     }
 
-    // 6. Merge Inteligente (Levenstein)
+    // MERGE INTELIGENTE (Tabela + Afetivos + Comentários)
     const similarity = (a: string, b: string) => {
       a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
       b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -242,7 +345,15 @@ export default function App() {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        rawItems.push(...textContent.items.map((it: any) => ({ text: it.str.trim(), x: it.transform[4], y: it.transform[5] })));
+        
+        // O offset de página impede que a página 1 e 2 se fundam caso o Y se repita
+        const pageOffsetY = (pdf.numPages - i) * 3000; 
+
+        rawItems.push(...textContent.items.map((it: any) => ({ 
+          text: it.str.trim(), 
+          x: it.transform[4], 
+          y: it.transform[5] + pageOffsetY 
+        })));
         
         let sortedForText = [...textContent.items].sort((a, b) => {
           if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
@@ -306,7 +417,7 @@ export default function App() {
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Processamento local instantâneo. Zero consumo de API.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Processamento local instantâneo. Arquitetura Espacial e Classificador de Tokens Integrados.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
