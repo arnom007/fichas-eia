@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
 
 declare global {
@@ -45,44 +45,17 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 );
 
 // ---------------------------------------------------------------------------------
-// MÓDULO DE EXTRAÇÃO ESPACIAL E ANÁLISE DE TOKENS
+// MÓDULOS DE PROCESSAMENTO ESPACIAL E TEXTUAL
 // ---------------------------------------------------------------------------------
 
-const labelToken = (text: string) => {
-  if (/^\d{1,3}$/.test(text)) return 'NUM';
-  if (/^[1-6]$/.test(text)) return 'GRAU';
-  if (/^(PR|RC|RM|RO|--)$/i.test(text)) return 'FASE';
-  return '';
-};
-
-const DebugOverlay = ({ tokens }: { tokens: any[] }) => {
-  return (
-    <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
-      {tokens.map((t: any, i: number) => (
-        <div
-          key={i}
-          style={{
-            position: 'absolute',
-            left: t.x * 1.5, 
-            bottom: (t.y * 1.5) - 100, 
-            border: '1px solid red',
-            background: 'rgba(255,0,0,0.15)',
-            fontSize: '10px',
-            padding: '1px 3px',
-            color: 'red',
-            whiteSpace: 'nowrap'
-          }}
-        >
-          <div style={{ fontWeight: 'bold' }}>
-            {t.text} <span style={{ color: '#2563eb' }}>{labelToken(t.text)}</span>
-          </div>
-          <div style={{ fontSize: '8px', color: '#64748b' }}>
-            x:{Math.round(t.x)} y:{Math.round(t.y)}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+const normalizeText = (text: string) => {
+  return text
+    .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') // Separa número colado no nome (Capota1)
+    .replace(/([1-6])(PR|RC|RM|RO)/g, '$1 $2') // Separa grau + fase (5RO)
+    .replace(/(PR|RC|RM|RO)([1-6])/g, '$1 $2') // Separa fase + grau (RM5)
+    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/g, '$1') // Remove duplicações (RM RM)
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 };
 
 const detectLayoutType = (text: string) => {
@@ -96,8 +69,7 @@ const classifyToken = (text: string) => {
   if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
   if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
   if (/^[1-6]$/.test(text)) return 'grau';
-  if (/^\d{1,2}[-–—.:]?$/.test(text)) return 'numero'; 
-  if (/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i.test(text)) return 'fase_grau';
+  if (/^\d{1,3}[-–—.:]?$/.test(text)) return 'numero'; 
   return 'texto';
 };
 
@@ -106,8 +78,8 @@ const detectColumns = (lines: any[][]) => {
   lines.forEach((l: any[]) => {
     const lastTokens = l.slice(-3);
     lastTokens.forEach((t: any) => {
-      const type = classifyToken(t.text.replace(/^(\d{1,2})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2').split(/\s+/)[0]);
-      if (type === 'fase' || type === 'grau' || type === 'fase_grau') xs.push(t.x);
+      const type = classifyToken(t.text.split(/\s+/)[0]);
+      if (type === 'fase' || type === 'grau') xs.push(t.x);
     });
   });
   
@@ -152,9 +124,7 @@ const buildLines = (items: any[]) => {
 const isItemStart = (line: any[]) => {
   if (!line || line.length === 0) return false;
   const text = line.map(t => t.text).join(' ').trim();
-  
   if (/^\d{1,3}\s*[-–—.:]?\b/.test(text)) return true;
-
   if (line.some(t => /^\d{1,3}$/.test(t.text))) {
     const first = line[0].text;
     if (!/^[a-zà-ÿ]/i.test(first)) return true;
@@ -165,22 +135,32 @@ const isItemStart = (line: any[]) => {
 const mergeBrokenLines = (lines: any[][]) => {
   const merged: any[][] = [];
   for (let i = 0; i < lines.length; i++) {
-    const current = lines[i];
-    if (merged.length === 0) {
-      merged.push([...current]);
+    const line = lines[i];
+    const text = line.map((t: any) => t.text).join(' ').trim();
+
+    if (/^\d{1,3}$/.test(text)) {
+      merged.push([...line]);
       continue;
     }
+
+    if (merged.length === 0) {
+      merged.push([...line]);
+      continue;
+    }
+
     const last = merged[merged.length - 1];
 
-    if (!isItemStart(current)) {
-      const dy = Math.abs(current[0].y - last[0].y);
-      if (dy < 8) {
-        last.push(...current);
+    if (!isItemStart(line)) {
+      const dy = Math.abs(line[0].y - last[0].y);
+      if (dy < 12) {
+        last.push(...line);
         last.sort((a: any, b: any) => a.x - b.x); 
-        continue;
+      } else {
+        merged.push([...line]);
       }
+    } else {
+      merged.push([...line]);
     }
-    merged.push([...current]);
   }
   return merged;
 };
@@ -206,7 +186,7 @@ const findNearestGrau = (refToken: any, lineTokens: any[], columns: any) => {
 };
 
 // ---------------------------------------------------------------------------------
-// EXTRATORES DE TABELA (MÁQUINA DE ESTADO CONTÍNUO)
+// EXTRATORES CONTÍNUOS
 // ---------------------------------------------------------------------------------
 
 const extractItemsFromLines = (lines: any[][], columns: any) => {
@@ -228,26 +208,16 @@ const extractItemsFromLines = (lines: any[][], columns: any) => {
     if (!current) return;
 
     line.forEach((token: any) => {
-      const cleanText = token.text.replace(/^(\d{1,2})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2');
-      const subTokens = cleanText.split(/\s+/);
+      const subTokens = token.text.split(/\s+/);
 
       subTokens.forEach((subText: string) => {
-        const type = classifyToken(subText);
-        const isFarRight = token.x >= limitX - 40; 
-
-        if (type === 'fase_grau' && isFarRight) {
-          const pgMatch = subText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
-          if (pgMatch) { 
-            current.fase = pgMatch[1].toUpperCase(); 
-            if (pgMatch[2]) current.grau = pgMatch[2].toUpperCase(); 
-          }
-        } else if (type === 'fase' && isFarRight) {
+        if (/^[1-6]$/.test(subText)) {
+          current.grau = subText;
+        } else if (/^(PR|RC|RM|RO|--)$/i.test(subText)) {
           current.fase = subText.toUpperCase();
-        } else if (type === 'grau') {
-          current.grau = subText.toUpperCase(); 
-        } else if (type === 'numero' && !current.numero) {
+        } else if (/^\d{1,3}$/.test(subText.replace(/[-–—.:]/g, '')) && !current.numero) {
           current.numero = subText.replace(/[-–—.:]/g, ''); 
-        } else if (type === 'texto' || type === 'ignore') {
+        } else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
           if (subText === '-' && current.nome.length > 10) return; 
           if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
             if (token.x < limitX + 20) {
@@ -291,17 +261,13 @@ const extractItemsPreSolo = (lines: any[][], columns: any) => {
 
     line.forEach((token: any) => {
       const cleanText = token.text.trim();
-      const type = classifyToken(cleanText);
 
-      if (type === 'numero' && !current.numero) {
-        current.numero = cleanText.replace(/[-–—.:]/g, '');
-      } else if (type === 'grau') {
+      if (/^[1-6]$/.test(cleanText)) {
         current.grau = cleanText;
-      } else if (type === 'fase_grau') {
-         const pgMatch = cleanText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
-         if (pgMatch && pgMatch[2]) current.grau = pgMatch[2].toUpperCase();
-      } else if (type === 'fase') {
-         // Default fixo para PR
+      } else if (/^(PR|RC|RM|RO|--)$/i.test(cleanText)) {
+        // Assume default PR
+      } else if (/^\d{1,3}$/.test(cleanText.replace(/[-–—.:]/g, '')) && !current.numero) {
+        current.numero = cleanText.replace(/[-–—.:]/g, '');
       } else {
          if (cleanText === '-' && current.nome.length > 10) return;
          current.nome += (current.nome ? ' ' : '') + cleanText;
@@ -323,7 +289,7 @@ const extractItemsPreSolo = (lines: any[][], columns: any) => {
 };
 
 // ---------------------------------------------------------------------------------
-// FALLBACKS E VALIDAÇÃO
+// FALLBACKS, COMPONENTES E UTILITÁRIOS
 // ---------------------------------------------------------------------------------
 
 const ultimateFallback = (items: any[], rawText: string) => {
@@ -358,8 +324,52 @@ const validateItems = (items: any[]) => {
   return errors;
 };
 
+const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: any[] }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (!pdf || !tokens.length) return;
+    
+    const render = async () => {
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 1.5 });
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+
+      ctx.strokeStyle = 'red';
+      ctx.fillStyle = 'red';
+      ctx.font = '10px Arial';
+
+      tokens.forEach((t: any, i: number) => {
+        // Ajuste de eixo Y (PDF.js renderiza de baixo para cima)
+        const x = t.x * 1.5;
+        const y = viewport.height - (t.y * 1.5);
+        
+        ctx.strokeRect(x, y - 12, 30, 12);
+        ctx.fillText(`${i}`, x, y);
+      });
+    };
+
+    render();
+  }, [pdf, tokens]);
+
+  return (
+    <div className="w-full overflow-auto border border-slate-300 rounded-xl shadow-inner bg-slate-100 p-4">
+      <canvas ref={canvasRef} className="mx-auto bg-white shadow-md" />
+    </div>
+  );
+};
+
 // ---------------------------------------------------------------------------------
-// APLICAÇÃO PRINCIPAL
+// COMPONENTE PRINCIPAL (APP)
 // ---------------------------------------------------------------------------------
 
 export default function App() {
@@ -372,6 +382,7 @@ export default function App() {
   
   const [debugMode, setDebugMode] = useState(false);
   const [rawPdfTokens, setRawPdfTokens] = useState<any[]>([]);
+  const [pdfDocument, setPdfDocument] = useState<any>(null);
 
   const WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxLlUKIeUnaLW2VeWOpIG5ZtrrAFy_Qg9YQTq5fG4HrMUg7kt196zcFAt4jOjBrMsEE/exec";
 
@@ -392,7 +403,6 @@ export default function App() {
   };
 
   const processStructuredData = (rawItems: any[], fullText: string) => {
-    
     const layout = detectLayoutType(fullText);
     const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
     
@@ -542,21 +552,23 @@ export default function App() {
       .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
     const errors = validateItems(finalItems);
-    if (errors.length > 0) console.warn("Potenciais inconsistências estruturais detectadas:", errors);
+    if (errors.length > 0) console.warn("Inconsistências detectadas na estrutura:", errors);
 
     if (finalItems.length > 0) { setItems(finalItems); setStatus('reviewing'); setErrorMsg(''); } 
-    else { setErrorMsg('Não foi possível extrair dados estruturados.'); setStatus('idle'); }
+    else { setErrorMsg('Falha na extração. Verifique a legibilidade do arquivo.'); setStatus('idle'); }
   };
 
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
-    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg('');
-    if (file.type !== 'application/pdf') { setErrorMsg('Selecione um PDF válido.'); setStatus('idle'); return; }
-    if (!window.pdfjsLib) { setErrorMsg('A biblioteca PDF.js não carregou.'); setStatus('idle'); return; }
+    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false);
+    if (file.type !== 'application/pdf') { setErrorMsg('Formato inválido. Selecione um documento PDF.'); setStatus('idle'); return; }
+    if (!window.pdfjsLib) { setErrorMsg('Módulo de leitura indisponível. Recarregue a página.'); setStatus('idle'); return; }
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      setPdfDocument(pdf);
+      
       const rawItems: any[] = [];
       let fullText = '';
 
@@ -565,7 +577,7 @@ export default function App() {
         const textContent = await page.getTextContent();
         const pageOffsetY = (pdf.numPages - i) * 3000; 
 
-        rawItems.push(...textContent.items.map((it: any) => ({ text: it.str.trim(), x: it.transform[4], y: it.transform[5] + pageOffsetY })));
+        rawItems.push(...textContent.items.map((it: any) => ({ text: normalizeText(it.str), x: it.transform[4], y: it.transform[5] + pageOffsetY })));
         
         let sortedForText = [...textContent.items].sort((a: any, b: any) => {
           if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
@@ -576,18 +588,18 @@ export default function App() {
         for (const it of sortedForText) {
            if (lastY !== null && Math.abs(it.transform[5] - lastY) > 5) fullText += '\n';
            else if (lastY !== null) fullText += ' ';
-           fullText += it.str; lastY = it.transform[5];
+           fullText += normalizeText(it.str); lastY = it.transform[5];
         }
         fullText += '\n\n';
       }
-      setRawPdfTokens(rawItems);
+      setRawPdfTokens(rawItems.filter((t:any) => t.y < 3000)); // Limita visualização de debug à primeira página
       processStructuredData(rawItems, fullText);
-    } catch (err) { setErrorMsg('Erro na leitura do PDF. Verifique a formatação do arquivo.'); setStatus('idle'); }
+    } catch (err) { setErrorMsg('Falha no processamento. Documento corrompido ou inacessível.'); setStatus('idle'); }
   };
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '--', grau: '', comentario: '', confidence: 1.0 }]);
+  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Registro Manual', fase: '--', grau: '', comentario: '', confidence: 1.0 }]);
 
   const buildPayload = () => items.map((item: any) => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
 
@@ -599,28 +611,26 @@ export default function App() {
   };
 
   const sendWebhook = async () => {
-    if (!meta.esquadrilha) { setErrorMsg('Preenchimento obrigatório: Esquadrilha.'); window.scrollTo(0, 0); return; }
-    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Preenchimento obrigatório: Trigramas do Aluno e Instrutor.'); window.scrollTo(0, 0); return; }
+    if (!meta.esquadrilha) { setErrorMsg('Obrigatório informar a Esquadrilha.'); window.scrollTo(0, 0); return; }
+    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Obrigatório informar trigramas de Aluno e Instrutor.'); window.scrollTo(0, 0); return; }
     setModalState('sending'); setShowModal(true);
     try {
       const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(buildPayload()) });
-      if (res.ok) { setModalState('success'); setModalMessage('Sincronização com o banco de dados concluída.'); } 
-      else throw new Error('Falha na requisição.');
-    } catch { setModalState('error'); setModalMessage('Erro de rede. Verifique sua conexão ou tente a exportação manual via CSV.'); }
+      if (res.ok) { setModalState('success'); setModalMessage('Integração concluída com sucesso.'); } 
+      else throw new Error('A requisição falhou.');
+    } catch { setModalState('error'); setModalMessage('Erro de conexão. A exportação manual em CSV continua disponível.'); }
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
+  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
-      {debugMode && <DebugOverlay tokens={rawPdfTokens} />}
-      
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
-            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Enviando registros...</p></>)}
-            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Concluído!</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Leitura</button></>)}
-            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Erro</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Tentar Novamente</button></>)}
+            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando com a base de dados...</p></>)}
+            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Extração</button></>)}
+            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Aviso</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
           </div>
         </div>
       )}
@@ -629,10 +639,10 @@ export default function App() {
         <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
           <div className="flex items-center gap-5">
             <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-            <div><h1 className="text-3xl font-bold tracking-tight">Extrator de Fichas (EIA)</h1><p className="text-slate-500 text-lg">Motor de Extração e Análise Espacial.</p></div>
+            <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento de Fichas de Avaliação.</p></div>
           </div>
           {status === 'reviewing' && (
-            <button onClick={() => setDebugMode(!debugMode)} className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`} title="Ferramentas de Depuração Visual">
+            <button onClick={() => setDebugMode(!debugMode)} className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`} title="Módulo de Depuração Visual">
               <Bug size={24} />
             </button>
           )}
@@ -641,17 +651,24 @@ export default function App() {
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Importação de Arquivo</h2><p className="text-slate-500 mb-8 max-w-md">O sistema conta com inspeção visual (Bounding Boxes) e Score de Confiança.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Selecionar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura detecta automaticamente a estrutura do documento.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Analisando Documento</h2><p className="text-slate-500 mt-2">Construindo matriz espacial e interpretando dados...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Mapeamento vetorial e reconciliação de dados ativados...</p></div>
         )}
         
         {status === 'reviewing' && (
           <div className="space-y-6 relative z-10">
+            {debugMode && (
+              <div className="mb-6">
+                <h3 className="text-lg font-bold mb-3 flex items-center gap-2"><Bug size={20}/> Visualização de OCR</h3>
+                <PdfViewer pdf={pdfDocument} tokens={rawPdfTokens} />
+              </div>
+            )}
+
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
-              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho e Metadados</h3>
+              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho da Missão</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
                 <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
                 <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
@@ -666,38 +683,38 @@ export default function App() {
                 <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
                 <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de observações finais..." /></div>
+              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de observações operacionais..." /></div>
             </div>
             
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> {items.length} Registros Mapeados</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela de Avaliação ({items.length} itens)</h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setDebugMode(false); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Cancelar</button>
+                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setPdfDocument(null); setDebugMode(false); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
                   <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
-                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Sincronizar Banco de Dados</button>
+                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Salvar Registros</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Indicador de Confiança Estrutural">🛡️</th><th className="p-3 w-16">Nº</th><th className="p-3">Manobra / Item Avaliado</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center"></th></tr></thead>
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Acurácia da Extração">C.</th><th className="p-3 w-16">Item</th><th className="p-3">Manobra / Competência</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
                         <td className="p-3 text-center">
-                          <div className={`w-3 h-3 rounded-full mx-auto ${it.confidence > 0.6 ? 'bg-green-400' : (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')}`} title={`Confiança: ${Math.round(it.confidence * 100)}%`}></div>
+                          <div className={`w-3 h-3 rounded-full mx-auto ${it.confidence > 0.6 ? 'bg-green-400' : (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')}`} title={`Acurácia calculada: ${Math.round(it.confidence * 100)}%`}></div>
                         </td>
                         <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item..." /></td>
+                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item de avaliação..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
                         <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Anotações..." /></td>
+                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar dados..." /></td>
                         <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Adicionar Registro Manual</button></div>
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserir Linha Manual</button></div>
               </div>
             </div>
           </div>
