@@ -1,11 +1,57 @@
 import { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug, Info } from 'lucide-react';
+import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
 
 declare global {
   interface Window {
     pdfjsLib: any;
   }
 }
+
+// --- FUNÇÕES UTILITÁRIAS DE STRING ---
+const similarity = (s1: string, s2: string) => {
+  let longer = s1;
+  let shorter = s2;
+  if (s1.length < s2.length) {
+    longer = s2;
+    shorter = s1;
+  }
+  const longerLength = longer.length;
+  if (longerLength === 0) {
+    return 1.0;
+  }
+  return (longerLength - editDistance(longer, shorter)) / parseFloat(longerLength.toString());
+};
+
+const editDistance = (s1: string, s2: string) => {
+  s1 = s1.toLowerCase();
+  s2 = s2.toLowerCase();
+  const costs = new Array();
+  for (let i = 0; i <= s1.length; i++) {
+    let lastValue = i;
+    for (let j = 0; j <= s2.length; j++) {
+      if (i === 0) {
+        costs[j] = j;
+      } else {
+        if (j > 0) {
+          let newValue = costs[j - 1];
+          if (s1.charAt(i - 1) !== s2.charAt(j - 1)) {
+            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+          }
+          costs[j - 1] = lastValue;
+          lastValue = newValue;
+        }
+      }
+    }
+    if (i > 0) {
+      costs[s2.length] = lastValue;
+    }
+  }
+  return costs[s2.length];
+};
+
+const normalizeString = (str: string) => {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+};
 
 const getGradeColorClass = (grau: string) => {
   const g = grau?.toUpperCase().trim() || '';
@@ -17,6 +63,7 @@ const getGradeColorClass = (grau: string) => {
   return 'text-slate-900 font-medium';
 };
 
+// --- COMPONENTES DE UI ---
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
@@ -50,26 +97,12 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 
 const normalizeText = (text: string) => {
   return text
-    .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') 
-    .replace(/([1-6])(PR|RC|RM|RO)/gi, '$1 $2') 
-    .replace(/(PR|RC|RM|RO)([1-6])/gi, '$1 $2') 
-    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/gi, '$1') 
+    .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') // Separa número colado no nome (Capota1)
+    .replace(/([1-6])(PR|RC|RM|RO)/g, '$1 $2') // Separa grau + fase (5RO)
+    .replace(/(PR|RC|RM|RO)([1-6])/g, '$1 $2') // Separa fase + grau (RM5)
+    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/g, '$1') // Remove duplicações (RM RM)
     .replace(/\s{2,}/g, ' ')
     .trim();
-};
-
-const isNoise = (text: string) => {
-  const t = text.toUpperCase().trim();
-  return (
-    t.includes('MATERIAL DE ACESSO RESTRITO') ||
-    t.includes('COMANDO DA AERONÁUTICA') ||
-    t.includes('ESQUADRÃO') ||
-    t.includes('T-27') ||
-    t.includes('PÁGINA') ||
-    /^\d+\s+DE\s+\d+$/.test(t) ||
-    /^PROTOCOLO/i.test(t) ||
-    t.length < 2
-  );
 };
 
 const detectLayoutType = (text: string) => {
@@ -85,13 +118,6 @@ const classifyToken = (text: string) => {
   if (/^[1-6]$/.test(text)) return 'grau';
   if (/^\d{1,3}[-–—.:]?$/.test(text)) return 'numero'; 
   return 'texto';
-};
-
-const getTokenType = (t: string) => {
-  if (/^\d{1,3}$/.test(t)) return 'NUM';
-  if (/^[1-6]$/.test(t)) return 'GRAU';
-  if (/^(PR|RC|RM|RO)$/i.test(t)) return 'FASE';
-  return 'TXT';
 };
 
 const detectColumns = (lines: any[][]) => {
@@ -145,13 +171,11 @@ const buildLines = (items: any[]) => {
 const isItemStart = (line: any[]) => {
   if (!line || line.length === 0) return false;
   const text = line.map(t => t.text).join(' ').trim();
-  
   if (/^\d{1,3}\s*[-–—.:]?\b/.test(text)) return true;
-  if (/^\d{1,3}$/.test(text)) return true;
-  
-  const hasNumber = line.find(t => /^\d{1,3}$/.test(t.text));
-  if (hasNumber && hasNumber.x < 100) return true;
-
+  if (line.some(t => /^\d{1,3}$/.test(t.text))) {
+    const first = line[0].text;
+    if (!/^[a-zà-ÿ]/i.test(first)) return true;
+  }
   return false;
 };
 
@@ -188,86 +212,31 @@ const mergeBrokenLines = (lines: any[][]) => {
   return merged;
 };
 
-const findNearestGrau = (itemRef: any, tokens: any[]) => {
-  if (!itemRef) return '';
+const findNearestGrau = (refToken: any, lineTokens: any[], columns: any) => {
   let best = null;
-  let bestScore = Infinity;
+  let bestDist = Infinity;
 
-  tokens.forEach(t => {
+  lineTokens.forEach(t => {
     if (!/^[1-6]$/.test(t.text.trim())) return;
+    const dy = Math.abs(t.y - refToken.y);
+    const dx = Math.abs(t.x - columns.grau);
+    if (dy > 6) return; 
     
-    const dx = Math.abs(t.x - itemRef.x);
-    const dy = Math.abs(t.y - itemRef.y);
-    const score = dx + dy * 2;
-
-    if (score < bestScore && dy < 40) {
-      best = t.text;
-      bestScore = score;
+    const dist = dx + (dy * 5); 
+    if (dist < bestDist) {
+      best = t;
+      bestDist = dist;
     }
   });
 
-  return best || '';
-};
-
-// ---------------------------------------------------------------------------------
-// MÓDULO DE VALIDAÇÃO SEQUENCIAL (RECOVERY DE ITENS)
-// ---------------------------------------------------------------------------------
-
-const findMissingNumbers = (items: any[]) => {
-  const nums = items
-    .map(i => parseInt(i.numero))
-    .filter(n => !isNaN(n))
-    .sort((a, b) => a - b);
-
-  const missing: number[] = [];
-
-  for (let i = 0; i < nums.length - 1; i++) {
-    const diff = nums[i + 1] - nums[i];
-    if (diff > 1 && diff < 15) {
-      for (let j = 1; j < diff; j++) {
-        missing.push(nums[i] + j);
-      }
-    }
-  }
-  return missing;
-};
-
-const recoverMissingItems = (missingNumbers: number[], rawText: string) => {
-  const recovered: any[] = [];
-
-  missingNumbers.forEach(num => {
-    const regex = new RegExp(`(?:^|\\s)${num}\\s*[-–—.:]?\\s*([^\\d]{4,60}?)(?:[1-6]|PR|RC|RM|RO|N/O|N/A|NR|\\s|$)`, 'i');
-    const match = rawText.match(regex);
-
-    if (match) {
-      let nome = match[1]
-        .replace(/(PR|RC|RM|RO|[1-6])/gi, '') 
-        .replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '')
-        .trim();
-
-      if (nome.length > 3 && !nome.toLowerCase().includes('comentários')) {
-        recovered.push({
-          id: crypto.randomUUID(),
-          numero: String(num),
-          nome,
-          fase: '--',
-          grau: '',
-          comentario: '',
-          confidence: 0.35,
-          isRecovered: true
-        });
-      }
-    }
-  });
-
-  return recovered;
+  return best ? (best as any).text : '';
 };
 
 // ---------------------------------------------------------------------------------
 // EXTRATORES CONTÍNUOS
 // ---------------------------------------------------------------------------------
 
-const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) => {
+const extractItemsFromLines = (lines: any[][], columns: any) => {
   const items: any[] = [];
   let current: any = null;
   const limitX = Math.min(columns.fase, columns.grau);
@@ -280,7 +249,7 @@ const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) =
         current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
         items.push(current);
       }
-      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: '--', grau: '', comentario: '', refToken: null };
+      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: '--', grau: '', comentario: '' };
     }
 
     if (!current) return;
@@ -289,23 +258,13 @@ const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) =
       const subTokens = token.text.split(/\s+/);
 
       subTokens.forEach((subText: string) => {
-        if (!current.numero && /^\d{1,3}$/.test(subText.replace(/[-–—.:]/g, ''))) {
-          current.numero = subText.replace(/[-–—.:]/g, '');
-          current.refToken = token;
-          return;
-        }
-        
         if (/^[1-6]$/.test(subText)) {
           current.grau = subText;
-          return;
-        }
-
-        if (/^(PR|RC|RM|RO)$/i.test(subText)) {
+        } else if (/^(PR|RC|RM|RO|--)$/i.test(subText)) {
           current.fase = subText.toUpperCase();
-          return;
-        }
-
-        if (!/^[\d\-]+$/.test(subText) && !/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
+        } else if (/^\d{1,3}$/.test(subText.replace(/[-–—.:]/g, '')) && !current.numero) {
+          current.numero = subText.replace(/[-–—.:]/g, ''); 
+        } else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
           if (subText === '-' && current.nome.length > 10) return; 
           if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
             if (token.x < limitX + 20) {
@@ -316,8 +275,8 @@ const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) =
       });
     });
 
-    if (!current.grau && current.refToken) {
-      const nearest = findNearestGrau(current.refToken, allTokens);
+    if (!current.grau && line.length > 0) {
+      const nearest = findNearestGrau(line[0], line, columns);
       if (nearest) current.grau = nearest;
     }
   });
@@ -330,8 +289,7 @@ const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) =
   return items;
 };
 
-// Remoção do parâmetro não utilizado (columns)
-const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
+const extractItemsPreSolo = (lines: any[][], columns: any) => {
   const items: any[] = [];
   let current: any = null;
   
@@ -343,7 +301,7 @@ const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
         current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
         items.push(current);
       }
-      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: 'PR', grau: '', comentario: '', refToken: null };
+      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: 'PR', grau: '', comentario: '' };
     }
 
     if (!current) return;
@@ -351,29 +309,20 @@ const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
     line.forEach((token: any) => {
       const cleanText = token.text.trim();
 
-      if (!current.numero && /^\d{1,3}$/.test(cleanText.replace(/[-–—.:]/g, ''))) {
-        current.numero = cleanText.replace(/[-–—.:]/g, '');
-        current.refToken = token;
-        return;
-      }
-
       if (/^[1-6]$/.test(cleanText)) {
         current.grau = cleanText;
-        return;
-      }
-
-      if (/^(PR|RC|RM|RO)$/i.test(cleanText)) {
-        return; 
-      }
-
-      if (!/^[\d\-]+$/.test(cleanText)) {
+      } else if (/^(PR|RC|RM|RO|--)$/i.test(cleanText)) {
+        // Assume default PR
+      } else if (/^\d{1,3}$/.test(cleanText.replace(/[-–—.:]/g, '')) && !current.numero) {
+        current.numero = cleanText.replace(/[-–—.:]/g, '');
+      } else {
          if (cleanText === '-' && current.nome.length > 10) return;
          current.nome += (current.nome ? ' ' : '') + cleanText;
       }
     });
 
-    if (!current.grau && current.refToken) {
-      const nearest = findNearestGrau(current.refToken, allTokens);
+    if (!current.grau && line.length > 0) {
+      const nearest = findNearestGrau(line[0], line, columns);
       if (nearest) current.grau = nearest;
     }
   });
@@ -387,7 +336,7 @@ const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
 };
 
 // ---------------------------------------------------------------------------------
-// FALLBACKS E VALIDAÇÃO
+// FALLBACKS, COMPONENTES E UTILITÁRIOS
 // ---------------------------------------------------------------------------------
 
 const ultimateFallback = (items: any[], rawText: string) => {
@@ -405,7 +354,6 @@ const ultimateFallback = (items: any[], rawText: string) => {
 
 const computeConfidence = (item: any) => {
   let score = 0;
-  if (item.isRecovered) return 0.35; 
   if (item.numero) score += 0.3;
   if (item.nome.length > 5) score += 0.3;
   if (item.grau) score += 0.2;
@@ -447,13 +395,13 @@ const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: any[] }) => {
       ctx.fillStyle = 'red';
       ctx.font = '10px Arial';
 
-      tokens.forEach((t: any) => {
-        const type = getTokenType(t.text);
+      tokens.forEach((t: any, i: number) => {
+        // Ajuste de eixo Y (PDF.js renderiza de baixo para cima)
         const x = t.x * 1.5;
         const y = viewport.height - (t.y * 1.5);
         
-        ctx.strokeRect(x, y - 12, 40, 12);
-        ctx.fillText(`${type}:${t.text}`, x, y - 2);
+        ctx.strokeRect(x, y - 12, 30, 12);
+        ctx.fillText(`${i}`, x, y);
       });
     };
 
@@ -468,13 +416,12 @@ const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: any[] }) => {
 };
 
 // ---------------------------------------------------------------------------------
-// COMPONENTE DE APLICAÇÃO (VIEW)
+// COMPONENTE PRINCIPAL (APP)
 // ---------------------------------------------------------------------------------
 
 export default function App() {
   const [status, setStatus] = useState('idle'); 
   const [items, setItems] = useState<any[]>([]);
-  const [recoveredAlert, setRecoveredAlert] = useState<number[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalState, setModalState] = useState('sending');
@@ -503,10 +450,19 @@ export default function App() {
   };
 
   const processStructuredData = (rawItems: any[], fullText: string) => {
-    setRecoveredAlert([]);
-    
-    const layout = detectLayoutType(fullText);
-    const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    // 1. LIMPEZA GLOBAL (A sua ideia fantástica)
+    let globalCleanText = fullText
+      .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
+      .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
+      .replace(/--- PAGE \d+ ---/gi, '')
+      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
+      .replace(/COMANDO DA AERONÁUTICA/gi, '')
+      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+      .replace(/PROT[\s.:]*\d+/gi, '');
+
+    const layout = detectLayoutType(globalCleanText);
+    const cleanHeader = globalCleanText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
     
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     let tipoMissaoDetectado = 'Normal';
@@ -528,11 +484,12 @@ export default function App() {
       pousos: cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i)?.[1] || '',
       grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : (matchGrauMissao ? matchGrauMissao[1] : ''),
       tipoMissao: tipoMissaoDetectado, hdep, tev,
-      parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
+      parecer: (globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
 
-    const cleanRawItems = rawItems.filter((t: any) => !isNoise(t.text));
-    const allLines = buildLines(cleanRawItems);
+    // Removemos os tokens do texto global, mas mantemos o poder do algoritmo espacial
+    const normalized = rawItems.map((i: any) => ({ text: i.text.trim(), x: i.x, y: i.y })).filter((i: any) => i.text.length > 0);
+    const allLines = buildLines(normalized);
 
     let tableLines: any[][] = [];
     let isTable = false;
@@ -560,21 +517,21 @@ export default function App() {
     let leftCols = detectColumns(leftMerged);
     let rightCols = detectColumns(rightMerged);
     
-    leftCols = refineColumns(cleanRawItems.filter((t:any) => t.x < 300), leftCols);
-    rightCols = refineColumns(cleanRawItems.filter((t:any) => t.x >= 300), rightCols);
+    leftCols = refineColumns(normalized.filter((t:any) => t.x < 300), leftCols);
+    rightCols = refineColumns(normalized.filter((t:any) => t.x >= 300), rightCols);
 
     let tableItems: any[] = [];
     if (layout === 'PRE') {
-      tableItems = [...extractItemsPreSolo(leftMerged, cleanRawItems), ...extractItemsPreSolo(rightMerged, cleanRawItems)];
+      tableItems = [...extractItemsPreSolo(leftMerged, leftCols), ...extractItemsPreSolo(rightMerged, rightCols)];
     } else {
-      tableItems = [...extractItemsFromLines(leftMerged, leftCols, cleanRawItems), ...extractItemsFromLines(rightMerged, rightCols, cleanRawItems)];
+      tableItems = [...extractItemsFromLines(leftMerged, leftCols), ...extractItemsFromLines(rightMerged, rightCols)];
     }
 
     const afetivos: any[] = [];
-    const idxAfetivos = fullText.search(/Itens Afetivos/i);
-    const idxComentarios = fullText.search(/Comentários:/i);
+    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
+    const idxComentarios = globalCleanText.search(/Comentários:/i);
     if (idxAfetivos !== -1) {
-      const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
+      const section = globalCleanText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : globalCleanText.length);
       const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
       let matchA;
       while ((matchA = afetivoRegex.exec(section)) !== null) {
@@ -590,20 +547,21 @@ export default function App() {
     }
 
     const comments: any[] = [];
-    const commentRegex = /(?:^|\s)(\d{1,2})\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
+    // A sua Regex unificada poderosa
+    const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
     const matches: any[] = [];
     let commentMatch;
     
-    while ((commentMatch = commentRegex.exec(fullText)) !== null) {
+    while ((commentMatch = commentRegex.exec(globalCleanText)) !== null) {
       matches.push({ index: commentMatch.index, length: commentMatch[0].length, numero: commentMatch[1].trim(), nome: commentMatch[2].trim(), insideParens: commentMatch[3] ? commentMatch[3].toUpperCase() : '' });
     }
 
     for (let i = 0; i < matches.length; i++) {
       const current = matches[i];
       const start = current.index + current.length;
-      let end = i + 1 < matches.length ? matches[i+1].index : fullText.length;
-      const assIdx = fullText.indexOf('Ass. Digital', start);
-      const recIdx = fullText.indexOf('Recomendações/Parecer:', start);
+      let end = i + 1 < matches.length ? matches[i+1].index : globalCleanText.length;
+      const assIdx = globalCleanText.indexOf('Ass. Digital', start);
+      const recIdx = globalCleanText.indexOf('Recomendações/Parecer:', start);
       if (assIdx !== -1 && assIdx < end) end = assIdx;
       if (recIdx !== -1 && recIdx < end) end = recIdx;
 
@@ -616,48 +574,35 @@ export default function App() {
 
       if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grau.replace(/\s+/g, ''))) grau = '';
       
-      let rawComentario = fullText.substring(start, end);
-      rawComentario = rawComentario.replace(/MATERIAL DE ACESSO RESTRITO/gi, '').replace(/Art\. 44.*?2012/gi, '').replace(/--- PAGE \d+ ---/gi, '').replace(/\b\d+\s+de\s+\d+\b/gi, '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      let rawComentario = globalCleanText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
       comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: rawComentario });
     }
-
-    const similarity = (a: string, b: string) => {
-      a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-      b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (a.includes(b) || b.includes(a)) return 1;
-      let score = 0; const wordsA = a.split(' ').filter(w => w.length > 2); const wordsB = b.split(' ').filter(w => w.length > 2);
-      if (wordsA.length === 0 || wordsB.length === 0) return 0;
-      wordsA.forEach(w => { if (wordsB.includes(w)) score++; }); return score / Math.max(wordsA.length, wordsB.length);
-    };
 
     let finalItems = [...tableItems, ...afetivos]; 
     comments.forEach((c: any) => {
       let target = finalItems.find((it: any) => it.numero === c.numero);
+      
       if (!target) {
-        const bestMatch = finalItems.map((it: any) => ({ it, score: similarity(it.nome, c.nome) })).sort((a: any, b: any) => b.score - a.score)[0];
-        if (bestMatch && bestMatch.score > 0.4) target = bestMatch.it;
+        target = finalItems.find((item: any) => {
+             const n1 = normalizeString(item.nome);
+             const n2 = normalizeString(c.nome);
+             return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
+          });
       }
+
       if (target) {
         target.comentario = c.comentario || target.comentario;
-        if (c.fase !== '--' && c.fase) target.fase = c.fase;
-        if (c.grau) target.grau = c.grau;
+        // A sua Safety Net!
+        if (!target.grau && c.grau && c.grau !== 'PR') target.grau = c.grau;
+        if (target.fase === '--' && c.fase !== '--') target.fase = c.fase;
+        if (c.grau === 'PR') target.fase = 'PR';
         if (!target.numero) target.numero = c.numero;
       } else {
         finalItems.push({ id: crypto.randomUUID(), numero: c.numero, nome: c.nome, fase: c.fase || '--', grau: c.grau || '', comentario: c.comentario });
       }
     });
 
-    finalItems = ultimateFallback(finalItems, fullText);
-
-    // ETAPA DE AUDITORIA SEQUENCIAL (RECOVERY DE GAPS)
-    const missingNums = findMissingNumbers(finalItems);
-    if (missingNums.length > 0) {
-      const recovered = recoverMissingItems(missingNums, fullText);
-      if (recovered.length > 0) {
-        finalItems = [...finalItems, ...recovered];
-        setRecoveredAlert(recovered.map(r => parseInt(r.numero)).sort((a,b)=>a-b));
-      }
-    }
+    finalItems = ultimateFallback(finalItems, globalCleanText);
 
     finalItems = finalItems
       .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
@@ -665,17 +610,17 @@ export default function App() {
       .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
     const errors = validateItems(finalItems);
-    if (errors.length > 0) console.warn("Avisos de integridade detectados:", errors);
+    if (errors.length > 0) console.warn("Inconsistências detectadas na estrutura:", errors);
 
     if (finalItems.length > 0) { setItems(finalItems); setStatus('reviewing'); setErrorMsg(''); } 
-    else { setErrorMsg('Não foi possível realizar o parsing dos dados estruturados.'); setStatus('idle'); }
+    else { setErrorMsg('Falha na extração. O PDF pode não estar no padrão esperado.'); setStatus('idle'); }
   };
 
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
-    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false); setRecoveredAlert([]);
-    if (file.type !== 'application/pdf') { setErrorMsg('Arquivo inválido. É exigido o formato PDF.'); setStatus('idle'); return; }
-    if (!window.pdfjsLib) { setErrorMsg('A dependência PDF.js não foi carregada no ambiente.'); setStatus('idle'); return; }
+    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false);
+    if (file.type !== 'application/pdf') { setErrorMsg('Formato inválido. Selecione um documento PDF.'); setStatus('idle'); return; }
+    if (!window.pdfjsLib) { setErrorMsg('Módulo de leitura indisponível. Recarregue a página.'); setStatus('idle'); return; }
 
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -705,9 +650,9 @@ export default function App() {
         }
         fullText += '\n\n';
       }
-      setRawPdfTokens(rawItems.filter((t:any) => t.y < 3000 && !isNoise(t.text)));
+      setRawPdfTokens(rawItems.filter((t:any) => t.y < 3000)); // Limita visualização de debug à primeira página
       processStructuredData(rawItems, fullText);
-    } catch (err) { setErrorMsg('Falha de interpretação. Verifique a integridade do arquivo.'); setStatus('idle'); }
+    } catch (err) { setErrorMsg('Falha no processamento. Documento corrompido ou inacessível.'); setStatus('idle'); }
   };
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
@@ -724,17 +669,17 @@ export default function App() {
   };
 
   const sendWebhook = async () => {
-    if (!meta.esquadrilha) { setErrorMsg('Preenchimento obrigatório: Esquadrilha.'); window.scrollTo(0, 0); return; }
-    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Preenchimento obrigatório: Trigramas.'); window.scrollTo(0, 0); return; }
+    if (!meta.esquadrilha) { setErrorMsg('Obrigatório informar a Esquadrilha.'); window.scrollTo(0, 0); return; }
+    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Obrigatório informar trigramas de Aluno e Instrutor.'); window.scrollTo(0, 0); return; }
     setModalState('sending'); setShowModal(true);
     try {
       const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(buildPayload()) });
-      if (res.ok) { setModalState('success'); setModalMessage('Integração com a base de dados concluída.'); } 
+      if (res.ok) { setModalState('success'); setModalMessage('Integração concluída com sucesso.'); } 
       else throw new Error('A requisição falhou.');
-    } catch { setModalState('error'); setModalMessage('Erro de rede. A exportação manual via arquivo CSV permanece disponível.'); }
+    } catch { setModalState('error'); setModalMessage('Erro de conexão. A exportação manual em CSV continua disponível.'); }
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setRecoveredAlert([]); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
+  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
@@ -742,53 +687,35 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
             {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando com a base de dados...</p></>)}
-            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Avaliação</button></>)}
-            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Falha Operacional</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
+            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Extração</button></>)}
+            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Aviso</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
           </div>
         </div>
       )}
       
       <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
-        <header className="mb-6 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
+        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
           <div className="flex items-center gap-5">
             <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-            <div><h1 className="text-3xl font-bold tracking-tight">Sistema de Extração EIA</h1><p className="text-slate-500 text-lg">Módulo de processamento analítico para fichas de instrução.</p></div>
+            <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento de Fichas de Avaliação.</p></div>
           </div>
-          {status === 'reviewing' && (
-            <button onClick={() => setDebugMode(!debugMode)} className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`} title="Habilitar Módulo de Depuração Visual">
-              <Bug size={24} />
-            </button>
-          )}
         </header>
 
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
-        {recoveredAlert.length > 0 && (
-          <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 font-medium flex items-center gap-3">
-            <Info className="text-yellow-600 shrink-0" size={20} />
-            <span>Auditoria sequencial identificou e recuperou lacunas na estrutura primária. Itens resgatados: <strong>{recoveredAlert.join(', ')}</strong></span>
-          </div>
-        )}
-
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Carregamento de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura aplica heurística para mapeamento estrutural e validação de sequência.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Selecionar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura detecta automaticamente a estrutura do documento.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Iniciando Varredura</h2><p className="text-slate-500 mt-2">Mapeando geometria de documento e reconciliação referencial...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Mapeamento vetorial e reconciliação de dados ativados...</p></div>
         )}
         
         {status === 'reviewing' && (
           <div className="space-y-6 relative z-10">
-            {debugMode && (
-              <div className="mb-6">
-                <h3 className="text-lg font-bold mb-3 flex items-center gap-2"><Bug size={20}/> Visualizador de Instâncias OCR</h3>
-                <PdfViewer pdf={pdfDocument} tokens={rawPdfTokens} />
-              </div>
-            )}
 
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
-              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Estrutura da Missão</h3>
+              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho da Missão</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
                 <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
                 <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
@@ -803,38 +730,35 @@ export default function App() {
                 <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
                 <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de avaliação final..." /></div>
+              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de observações operacionais..." /></div>
             </div>
             
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela Sintética ({items.length} instâncias mapeadas)</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela de Avaliação ({items.length} itens)</h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setPdfDocument(null); setDebugMode(false); setRecoveredAlert([]); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
-                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar Dados (.CSV)</button>
-                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Efetuar Gravação</button>
+                  <button onClick={() => { setStatus('idle'); setItems([]); setErrorMsg(''); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
+                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
+                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Salvar Registros</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Aferição do grau de confiança de modelagem">C.</th><th className="p-3 w-16">Nº</th><th className="p-3">Objeto de Avaliação</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Menção</th><th className="p-3">Extrato Documental Integrado</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Item</th><th className="p-3">Manobra / Competência</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
-                        <td className="p-3 text-center">
-                          <div className={`w-3 h-3 rounded-full mx-auto ${it.confidence > 0.6 ? 'bg-green-400' : (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')}`} title={`Grau de Previsibilidade: ${Math.round(it.confidence * 100)}%`}></div>
-                        </td>
                         <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Atributo avaliado..." /></td>
+                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item de avaliação..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
                         <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar registro verbal..." /></td>
+                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar dados..." /></td>
                         <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserção de Linha de Contingência</button></div>
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserir Linha Manual</button></div>
               </div>
             </div>
           </div>
