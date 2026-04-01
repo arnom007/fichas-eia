@@ -223,7 +223,6 @@ const findMissingNumbers = (items: any[]) => {
 
   for (let i = 0; i < nums.length - 1; i++) {
     const diff = nums[i + 1] - nums[i];
-    // Identifica saltos na numeração. O limite de 15 previne varreduras irreais.
     if (diff > 1 && diff < 15) {
       for (let j = 1; j < diff; j++) {
         missing.push(nums[i] + j);
@@ -237,13 +236,12 @@ const recoverMissingItems = (missingNumbers: number[], rawText: string) => {
   const recovered: any[] = [];
 
   missingNumbers.forEach(num => {
-    // Busca flexível no texto normalizado para encontrar o número seguido de texto
     const regex = new RegExp(`(?:^|\\s)${num}\\s*[-–—.:]?\\s*([^\\d]{4,60}?)(?:[1-6]|PR|RC|RM|RO|N/O|N/A|NR|\\s|$)`, 'i');
     const match = rawText.match(regex);
 
     if (match) {
       let nome = match[1]
-        .replace(/(PR|RC|RM|RO|[1-6])/gi, '') // Remove resíduos de graus/fases
+        .replace(/(PR|RC|RM|RO|[1-6])/gi, '') 
         .replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '')
         .trim();
 
@@ -255,7 +253,7 @@ const recoverMissingItems = (missingNumbers: number[], rawText: string) => {
           fase: '--',
           grau: '',
           comentario: '',
-          confidence: 0.35, // Marca com baixa confiança por ser um resgate heurístico
+          confidence: 0.35,
           isRecovered: true
         });
       }
@@ -332,7 +330,8 @@ const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) =
   return items;
 };
 
-const extractItemsPreSolo = (lines: any[][], columns: any, allTokens: any[]) => {
+// Remoção do parâmetro não utilizado (columns)
+const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
   const items: any[] = [];
   let current: any = null;
   
@@ -406,7 +405,7 @@ const ultimateFallback = (items: any[], rawText: string) => {
 
 const computeConfidence = (item: any) => {
   let score = 0;
-  if (item.isRecovered) return 0.35; // Penaliza itens resgatados por dedução
+  if (item.isRecovered) return 0.35; 
   if (item.numero) score += 0.3;
   if (item.nome.length > 5) score += 0.3;
   if (item.grau) score += 0.2;
@@ -566,7 +565,7 @@ export default function App() {
 
     let tableItems: any[] = [];
     if (layout === 'PRE') {
-      tableItems = [...extractItemsPreSolo(leftMerged, leftCols, cleanRawItems), ...extractItemsPreSolo(rightMerged, rightCols, cleanRawItems)];
+      tableItems = [...extractItemsPreSolo(leftMerged, cleanRawItems), ...extractItemsPreSolo(rightMerged, cleanRawItems)];
     } else {
       tableItems = [...extractItemsFromLines(leftMerged, leftCols, cleanRawItems), ...extractItemsFromLines(rightMerged, rightCols, cleanRawItems)];
     }
