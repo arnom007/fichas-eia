@@ -7,14 +7,8 @@ declare global {
   }
 }
 
-// --- FUNÇÕES UTILITÁRIAS DE STRING ---
-const normalizeString = (str: string) => {
-  if (!str) return '';
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-};
-
 const getGradeColorClass = (grau: string) => {
-  const g = grau?.toUpperCase().trim() || '';
+  const g = grau.toUpperCase().trim();
   if (g === '1' || g === 'PERIGOSO' || g === '2' || g === 'DEFICIENTE') return 'text-red-500 font-bold';
   if (g === '3' || g === 'PRECISA MELHORAR') return 'text-yellow-600 font-bold';
   if (g === '4' || g === 'NORMAL') return 'text-green-600 font-bold';
@@ -23,12 +17,16 @@ const getGradeColorClass = (grau: string) => {
   return 'text-slate-900 font-medium';
 };
 
-// --- COMPONENTES DE UI ---
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false, title = "" }: any) => (
   <div className={widthClass} title={title}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <input 
-      type="text" value={value || ''} onChange={onChange} placeholder={placeholder} maxLength={maxLength} disabled={disabled}
+      type="text" 
+      value={value} 
+      onChange={onChange} 
+      placeholder={placeholder}
+      maxLength={maxLength}
+      disabled={disabled}
       className={`w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-medium ${disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-70' : 'bg-slate-50 text-slate-800 hover:bg-white focus:bg-white'}`}
     />
   </div>
@@ -37,7 +35,11 @@ const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass 
 const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
-    <select value={value || ''} onChange={onChange} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none">
+    <select 
+      value={value} 
+      onChange={onChange} 
+      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none"
+    >
       <option value="" disabled>Selecione...</option>
       {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
     </select>
@@ -47,9 +49,19 @@ const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: 
 const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
-    <textarea value={value || ''} onChange={onChange} placeholder={placeholder} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium resize-y min-h-[60px] leading-relaxed" />
+    <textarea 
+      value={value} 
+      onChange={onChange} 
+      placeholder={placeholder}
+      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium resize-y min-h-[60px] leading-relaxed"
+    />
   </div>
 );
+
+// Função auxiliar para normalizar strings e facilitar o Match (Ideia brilhante)
+const normalizeString = (str: string) => {
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+};
 
 export default function App() {
   const [status, setStatus] = useState('idle'); 
@@ -68,8 +80,19 @@ export default function App() {
   });
 
   useEffect(() => {
-    document.body.style.display = 'block'; document.body.style.margin = '0'; document.documentElement.style.backgroundColor = '#f8fafc';
-    const rootNode = document.getElementById('root'); if (rootNode) rootNode.style.width = '100%';
+    document.body.style.display = 'block';
+    document.body.style.margin = '0';
+    document.documentElement.style.backgroundColor = '#f8fafc';
+    const rootNode = document.getElementById('root');
+    if (rootNode) {
+      rootNode.style.width = '100%';
+      rootNode.style.minHeight = '100vh';
+      rootNode.style.maxWidth = 'none';
+      rootNode.style.padding = '0';
+      rootNode.style.margin = '0';
+      rootNode.style.textAlign = 'left';
+    }
+
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
     script.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js'; };
@@ -86,241 +109,151 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // 1. LIMPEZA GLOBAL
-    let globalCleanText = text
-      .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-      .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-      .replace(/--- PAGE \d+ ---/gi, '')
-      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-      .replace(/COMANDO DA AERONÁUTICA/gi, '')
-      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
-      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-      .replace(/PROT[\s.:]*\d+/gi, ''); 
+    // 1. EXTRAÇÃO DO CABEÇALHO
+    const headerEndIdx = text.search(/\b1\s*-|Itens Afetivos|Comentários:/i);
+    const headerText = headerEndIdx !== -1 ? text.substring(0, headerEndIdx) : text;
+    const cleanHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').replace(/\|\|\|/g, '');
 
-    // 2. EXTRAÇÃO DE METADADOS
-    const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
-    const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
-    const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-
-    const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
+    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
 
     let tipoMissaoDetectado = 'Normal';
-    if (singleLineHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
-    else if (singleLineHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
-    else if (singleLineHeader.match(/\bAbortiva\b/i) || singleLineHeader.match(/\bVMET\b/i) || singleLineHeader.match(/\bVMAT\b/i)) {
-      tipoMissaoDetectado = 'Abortiva';
-    }
+    if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
+    else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
+    else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMET\b/i) || cleanHeader.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
 
-    const matchMissao = singleLineHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
+    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
-    const matchData = singleLineHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
     const data = matchData ? matchData[1] : '';
 
-    const times = Array.from(singleLineHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
+    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
     let hdep = '', tev = '';
-    if (times.length >= 2) {
-      hdep = times[0][1];
-      tev = times[times.length - 1][1]; 
-    } else if (times.length === 1) {
-      if (/TEV[^\d]*\d{2}:\d{2}/i.test(singleLineHeader)) tev = times[0][1];
-      else hdep = times[0][1];
-    }
+    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
+    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1]; else hdep = times[0][1]; }
 
     let fase = '';
-    const matchFase = singleLineHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
-    if (matchFase) {
-      fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
-    }
+    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
 
-    const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
+    const matchAeronave = cleanHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || cleanHeader.match(/\b(13\d{2}|14\d{2})\b/);
     const aeronave = matchAeronave ? matchAeronave[1] : '';
 
-    const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
+    const matchPousos = cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
     const pousos = matchPousos ? matchPousos[1] : '';
 
-    const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
-    let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+    const parecerMatch = text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i);
+    const parecerStr = parecerMatch ? parecerMatch[1].replace(/\|\|\|/g, '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
 
     setMeta(prev => ({
-      ...prev,
-      fase, aeronave, data, missao,
-      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
+      esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor,
+      fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
       tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr
     }));
 
-    // 3. EXTRAÇÃO DAS TABELAS COM TOKENIZAÇÃO
-    const extractedItemsMap = new Map();
+    // 2. PARSING ESTRUTURADO LINHA A LINHA (COM O SEPARADOR |||)
+    const finalItems: any[] = [];
+    const lines = text.split('\n');
 
-    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
-    const idxComentarios = globalCleanText.search(/Comentários:/i);
+    let isAffectiveArea = false;
+    let isCommentsArea = false;
+    let accumulatedComments = '';
 
-    let tableStartIndex = 0;
-    const firstItemRegex = /(?:^|\n|\r|\s)\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i;
-    const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
-    if (firstItemMatch) {
-      tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
-    }
+    for (let i = 0; i < lines.length; i++) {
+      let line = lines[i].trim();
+      if (!line) continue;
 
-    let tableEndIndex = globalCleanText.length;
-    if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
-    else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
+      // Remoção de lixo de rodapé no meio da linha
+      line = line.replace(/MATERIAL DE ACESSO RESTRITO/gi, '').replace(/Art\. 44.*?2012/gi, '').replace(/--- PAGE \d+ ---/gi, '');
 
-    let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      if (line.match(/Itens Afetivos/i)) { isAffectiveArea = true; continue; }
+      if (line.match(/Comentários:/i)) { isCommentsArea = true; isAffectiveArea = false; continue; }
 
-    // Passo A: Isolar os números das manobras substituindo-os por um Token protegido
-    let maskedTableText = cleanTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*/g, ' __ITEM_$1__ ');
-    maskedTableText = maskedTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])(?=[A-Za-zÀ-ÿ])/g, ' __ITEM_$1__ ');
-
-    // Passo B: Fatiar a string sempre que encontrar uma Fase/Grau
-    const pgRegex = /(?:\s+|^)[\(\[]?(PR|(?:RC|RM|RO|--)(?:[\s/\-]*)(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)?|[1-6]|N\/O|N\/A|NR|A\s*N\/)[\)\]]?(?=\s|$)/i;
-    const parts = maskedTableText.split(pgRegex);
-
-    for (let i = 0; i < parts.length - 1; i += 2) {
-      let rawText = parts[i].trim();
-      let rawPG = parts[i + 1].trim();
-      
-      if (!rawText && !rawPG) continue;
-
-      const numMatches = Array.from(rawText.matchAll(/__ITEM_(\d{1,2})__/g));
-      
-      let faseItem = '--';
-      let grauItem = '';
-      
-      let cleanPG = rawPG.toUpperCase();
-      if (cleanPG === 'PR') {
-         faseItem = 'PR';
-      } else if (/^(RC|RM|RO|--)$/.test(cleanPG)) {
-         faseItem = cleanPG;
-      } else if (/^([1-6]|N\/O|N\/A|NR|A\s*N\/|--)$/.test(cleanPG)) {
-         grauItem = cleanPG.replace(/\s+/g, '');
-      } else {
-         const matchPhase = cleanPG.match(/^(RC|RM|RO|--)(?:[\s/\-]*)(.*)$/);
-         if (matchPhase) {
-             faseItem = matchPhase[1];
-             grauItem = matchPhase[2].replace(/\s+/g, '');
-         }
+      if (isCommentsArea) {
+        accumulatedComments += line.replace(/\|\|\|/g, ' ') + ' \n ';
+        continue;
       }
 
-      const grauNorm = grauItem.replace(/\s+/g, '');
-      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
-        grauItem = '';
-      }
-
-      // Passo C: Associar os números encontrados à nota extraída
-      if (numMatches.length > 0) {
-        const pieces = rawText.split(/__ITEM_\d{1,2}__/);
+      // LÓGICA DE ITENS AFETIVOS
+      if (isAffectiveArea) {
+        const parts = line.split('|||').map((p: string) => p.trim()).filter((p: string) => p);
+        if (parts.length >= 2) {
+          const name = parts[0].trim();
+          const grade = parts[parts.length - 1].replace(/\s+/g, '').toUpperCase();
+          
+          if (/^(NORMAL|DESTACOU-SE|PRECISAMELHORAR|DEFICIENTE|ABAIXODOPADRÃO|PERIGOSO|N\/O|N\/A|NR|--)$/.test(grade)) {
+             finalItems.push({ 
+               id: crypto.randomUUID(), 
+               numero: '', 
+               nome: name, 
+               fase: '--', 
+               grau: ['--', 'N/O', 'N/A', 'NR'].includes(grade) ? '' : grade, 
+               comentario: '' 
+             });
+          }
+        }
+      } 
+      // LÓGICA DE MANOBRAS E ITENS DA TABELA PRINCIPAL
+      else {
+        const parts = line.split('|||').map((p: string) => p.trim()).filter((p: string) => p);
         
-        for (let j = 0; j < numMatches.length; j++) {
-            const num = numMatches[j][1];
-            
-            let name = pieces[j+1] ? pieces[j+1].trim() : '';
-            if (!name && j === 0) name = pieces[0].trim();
-            
-            name = name.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+        // Garante que tentamos processar mesmo se só tiver a manobra (parts.length >= 1)
+        if (parts.length >= 1) {
+          const maneuverPart = parts[0].trim();
+          const gradePart = parts.length >= 2 ? parts[parts.length - 1].trim().toUpperCase() : '';
 
-            let finalFase = '--';
-            let finalGrau = '';
-            if (j === numMatches.length - 1) {
-                finalFase = faseItem;
-                finalGrau = grauItem;
+          const numMatch = maneuverPart.match(/^(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(.*)$/);
+          if (numMatch) {
+            const num = numMatch[1];
+            const name = numMatch[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+
+            let faseItem = '--';
+            let grauItem = '';
+
+            if (gradePart) {
+              const pgParts = gradePart.split(/\s+/);
+              if (pgParts.length >= 2) {
+                  faseItem = pgParts[0].toUpperCase();
+                  grauItem = pgParts[1].toUpperCase();
+              } else if (pgParts.length === 1) {
+                  const singlePart = pgParts[0].toUpperCase();
+                  if (singlePart === 'PR') {
+                      faseItem = 'PR';
+                  } else if (/^(RC|RM|RO|--)$/.test(singlePart)) {
+                      faseItem = singlePart;
+                  } else {
+                      grauItem = singlePart;
+                  }
+              }
             }
 
-            extractedItemsMap.set(num, {
-              id: crypto.randomUUID(),
-              numero: num,
-              nome: name,
-              fase: finalFase,
-              grau: finalGrau,
-              comentario: ''
-            });
-        }
-      }
-    }
+            if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauItem.replace(/\s+/g, ''))) grauItem = '';
 
-    // 4. ITENS AFETIVOS
-    let affectiveAreaText = '';
-    if (idxAfetivos !== -1) {
-      const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
-      affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-      
-      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2}|\b(?:Comentários|Debriefing|Preparo|Raciocínio|Adaptação|Progresso|Reação|Interesse|Iniciativa|Aplicação|Conhecimento|Briefing|Mentalidade))/gi;
-      let matchT2;
-      
-      while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
-        let itemName = matchT2[1].trim();
-        let itemGrau = matchT2[2].toUpperCase();
-
-        const itemGrauNorm = itemGrau.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(itemGrauNorm)) {
-          itemGrau = '';
-        }
-
-        if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
-          const grauTextToRemove = matchT2[2].toUpperCase();
-          itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
-
-          if(itemName){
-            extractedItemsMap.set(itemName, {
-              id: crypto.randomUUID(),
-              numero: '', 
-              nome: itemName,
-              fase: '--',
-              grau: itemGrau, 
-              comentario: ''
-            });
+            // Impede a criação de duplicatas da mesma manobra
+            if (!finalItems.find(i => i.numero === num)) {
+              finalItems.push({ id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
+            }
           }
         }
       }
     }
 
-    let finalItems = Array.from(extractedItemsMap.values());
-
-    // 5. COMENTÁRIOS
-    if (idxComentarios !== -1) {
-      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    // 3. PARSING DE COMENTÁRIOS COM A SUA BLINDAGEM MESTRA
+    if (accumulatedComments) {
+      const cleanComments = accumulatedComments.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
       const allCommentMatches: any[] = [];
-
-      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
+      const unifiedCommentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
       let matchC;
       
       while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
-        const num = matchC[1].trim();
-        const nomeC = matchC[2].trim(); 
-        let rawFaseC = '--';
-        let rawGrauC = '';
-        const insideParens = matchC[3].toUpperCase();
-
-        if (insideParens.includes('/')) {
-           const parts = insideParens.split('/');
-           rawFaseC = parts[0].trim() || '--';
-           rawGrauC = parts[1].trim();
-        } else {
-           const val = insideParens.trim();
-           if (val === 'PR') {
-              rawFaseC = 'PR';
-           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
-              rawGrauC = val;
-           } else {
-              rawFaseC = val;
-           }
-        }
-
-        if (rawFaseC === 'PR') rawGrauC = '';
-        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
-        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
-          rawGrauC = '';
-        }
-
         allCommentMatches.push({
           index: matchC.index,
           length: matchC[0].length,
-          numero: num,
-          nome: nomeC, 
-          fase: rawFaseC,
-          grau: rawGrauC
+          numero: matchC[1].trim(),
+          nome: matchC[2].trim(),
+          rawOptions: matchC[3] ? matchC[3] : ''
         });
       }
 
@@ -345,8 +278,27 @@ export default function App() {
 
         let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
 
+        // Interpretador de notas dentro dos parênteses do comentário (Ex: RC/4, PR, 5)
+        let grauC = '';
+        let faseC = '--';
+        if (currentMatch.rawOptions) {
+          const inside = currentMatch.rawOptions.toUpperCase();
+          if (inside.includes('/')) {
+            const parts = inside.split('/');
+            faseC = parts[0].trim() || '--';
+            grauC = parts[1].trim();
+          } else {
+            const val = inside.trim();
+            if (val === 'PR') faseC = 'PR';
+            else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'PRECISA MELHORAR', 'DEFICIENTE'].includes(val)) grauC = val;
+            else faseC = val;
+          }
+        }
+        if (faseC === 'PR') grauC = '';
+        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(grauC.replace(/\s+/g, ''))) grauC = '';
+
+        // Busca o item na tabela
         let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
-        
         if (!foundItem) {
           foundItem = finalItems.find((item: any) => {
             const n1 = normalizeString(item.nome);
@@ -357,18 +309,17 @@ export default function App() {
 
         if (foundItem) {
           foundItem.comentario = comentarioText;
-          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
-          
-          // Safety Net: If table missed the grade, grab it from the comments! 🎯
-          if (!foundItem.grau && currentMatch.grau) foundItem.grau = currentMatch.grau;
-          if (foundItem.fase === '--' && currentMatch.fase !== '--') foundItem.fase = currentMatch.fase;
+          // SAFETY NET: Se o item na tabela estava sem nota, puxa a nota do comentário!
+          if (!foundItem.grau && grauC && grauC !== 'PR') foundItem.grau = grauC;
+          if (foundItem.fase === '--' && faseC !== '--') foundItem.fase = faseC;
+          if (faseC === 'PR') foundItem.fase = 'PR';
         } else {
           finalItems.push({
             id: crypto.randomUUID(),
             numero: currentMatch.numero,
             nome: currentMatch.nome,
-            fase: currentMatch.fase,
-            grau: currentMatch.grau,
+            fase: faseC,
+            grau: grauC,
             comentario: comentarioText
           });
         }
@@ -389,7 +340,7 @@ export default function App() {
       setStatus('reviewing');
       setErrorMsg('');
     } else {
-      setErrorMsg('Não foi possível extrair os itens. Verifique o arquivo enviado.');
+      setErrorMsg('Não foi possível extrair os itens. O PDF pode não estar no padrão esperado.');
       setStatus('idle');
     }
   };
@@ -444,7 +395,7 @@ export default function App() {
           }
           if (currentLine.length > 0) lines.push(currentLine);
 
-          // O MOTOR DE SEPARAÇÃO ESPACIAL DE COLUNAS
+          // O MOTOR DE SEPARAÇÃO ESPACIAL DE COLUNAS (A sua obra-prima)
           for (const line of lines) {
             line.sort((a, b) => a.transform[4] - b.transform[4]);
             let lineStr = '';
@@ -456,15 +407,27 @@ export default function App() {
                 const gap = nextLeftEdge - rightEdge;
                 
                 // SE O BURACO FÍSICO FOR GRANDE (COLUNA), INSERE O SEPARADOR DE PROTEÇÃO '|||'
-                // Aqui mantemos a sua ideia, mas usando uma quebra de linha normal para o Regex do parseTextoData fluir suave
                 if (gap > 35) {
-                  lineStr += ' \n ';
+                  lineStr += ' ||| ';
                 } else {
                   if (!lineStr.endsWith(' ')) lineStr += ' ';
                 }
               }
             }
-            fullText += lineStr.trim() + '\n';
+            // 1. Limpeza Global DIRETO NA FONTE
+            let tempLine = lineStr.trim()
+                .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
+                .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
+                .replace(/--- PAGE \d+ ---/gi, '')
+                .replace(/\b\d+\s+de\s+\d+\b/gi, '')
+                .replace(/COMANDO DA AERONÁUTICA/gi, '')
+                .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+                .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+                .replace(/PROT[\s.:]*\d+/gi, '');
+
+            if (tempLine.trim() !== '') {
+                fullText += tempLine.trim() + '\n';
+            }
           }
           fullText += '\n\n';
         }
@@ -482,7 +445,7 @@ export default function App() {
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item', fase: '', grau: '', comentario: '' }]);
+  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item', fase: '--', grau: '', comentario: '' }]);
 
   const buildPayloadData = () => {
     return items.map(item => ({
@@ -606,12 +569,20 @@ export default function App() {
                   <tbody className="text-sm">
                     {items.map((item) => (
                       <tr key={item.id} className="border-b hover:bg-slate-50/50">
-                        <td className="p-3"><input value={item.numero} onChange={(e) => updateItem(item.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" /></td>
-                        <td className="p-3"><input value={item.nome} onChange={(e) => updateItem(item.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(item.grau)}`} /></td>
-                        <td className="p-3"><input value={item.fase} onChange={(e) => updateItem(item.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" /></td>
-                        <td className="p-3"><input value={item.grau} onChange={(e) => updateItem(item.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase ${getGradeColorClass(item.grau)}`} /></td>
-                        <td className="p-3"><textarea value={item.comentario} onChange={(e) => updateItem(item.id, 'comentario', e.target.value)} className="w-full bg-transparent border px-2 py-1 rounded resize-y min-h-[40px]" /></td>
-                        <td className="p-3 text-center"><button onClick={() => removeItem(item.id)} className="p-2 hover:text-red-500 rounded"><Trash2 size={16} /></button></td>
+                        <td className="p-3"><input value={item.numero} onChange={(e) => updateItem(item.id, 'numero', e.target.value)} className="w-full bg-transparent px-1 outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded" /></td>
+                        <td className="p-3"><input value={item.nome} onChange={(e) => updateItem(item.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded ${getGradeColorClass(item.grau)}`} /></td>
+                        <td className="p-3"><input value={item.fase} onChange={(e) => updateItem(item.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded" /></td>
+                        <td className="p-3">
+                          <input 
+                            value={item.grau} 
+                            disabled={item.fase === 'PR'}
+                            title={item.fase === 'PR' ? "Itens PR não recebem nota." : ""}
+                            onChange={(e) => updateItem(item.id, 'grau', e.target.value)} 
+                            className={`w-full bg-transparent px-1 uppercase outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded ${getGradeColorClass(item.grau)} ${item.fase === 'PR' ? 'opacity-50 cursor-not-allowed' : ''}`} 
+                          />
+                        </td>
+                        <td className="p-3"><textarea value={item.comentario} onChange={(e) => updateItem(item.id, 'comentario', e.target.value)} className={`w-full bg-transparent border px-2 py-1 rounded resize-y min-h-[40px] outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`} placeholder="Sem comentários" /></td>
+                        <td className="p-3 text-center"><button onClick={() => removeItem(item.id)} className="p-2 hover:text-red-500 rounded transition"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
                   </tbody>
