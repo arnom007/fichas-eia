@@ -1,57 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle } from 'lucide-react';
 
 declare global {
   interface Window {
     pdfjsLib: any;
   }
 }
-
-// --- FUNÇÕES UTILITÁRIAS DE STRING ---
-const similarity = (s1: string, s2: string) => {
-  let longer = s1;
-  let shorter = s2;
-  if (s1.length < s2.length) {
-    longer = s2;
-    shorter = s1;
-  }
-  const longerLength = longer.length;
-  if (longerLength === 0) {
-    return 1.0;
-  }
-  return (longerLength - editDistance(longer, shorter)) / parseFloat(longerLength.toString());
-};
-
-const editDistance = (s1: string, s2: string) => {
-  s1 = s1.toLowerCase();
-  s2 = s2.toLowerCase();
-  const costs = new Array();
-  for (let i = 0; i <= s1.length; i++) {
-    let lastValue = i;
-    for (let j = 0; j <= s2.length; j++) {
-      if (i === 0) {
-        costs[j] = j;
-      } else {
-        if (j > 0) {
-          let newValue = costs[j - 1];
-          if (s1.charAt(i - 1) !== s2.charAt(j - 1)) {
-            newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
-          }
-          costs[j - 1] = lastValue;
-          lastValue = newValue;
-        }
-      }
-    }
-    if (i > 0) {
-      costs[s2.length] = lastValue;
-    }
-  }
-  return costs[s2.length];
-};
-
-const normalizeString = (str: string) => {
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-};
 
 const getGradeColorClass = (grau: string) => {
   const g = grau?.toUpperCase().trim() || '';
@@ -63,12 +17,16 @@ const getGradeColorClass = (grau: string) => {
   return 'text-slate-900 font-medium';
 };
 
-// --- COMPONENTES DE UI ---
-const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false }: any) => (
-  <div className={widthClass}>
+const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false, title = "" }: any) => (
+  <div className={widthClass} title={title}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
     <input 
-      type="text" value={value || ''} onChange={onChange} placeholder={placeholder} maxLength={maxLength} disabled={disabled}
+      type="text" 
+      value={value || ''} 
+      onChange={onChange} 
+      placeholder={placeholder}
+      maxLength={maxLength}
+      disabled={disabled}
       className={`w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition font-medium ${disabled ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-70' : 'bg-slate-50 text-slate-800 hover:bg-white focus:bg-white'}`}
     />
   </div>
@@ -77,7 +35,11 @@ const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass 
 const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
-    <select value={value || ''} onChange={onChange} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none">
+    <select 
+      value={value || ''} 
+      onChange={onChange} 
+      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium appearance-none"
+    >
       <option value="" disabled>Selecione...</option>
       {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
     </select>
@@ -87,357 +49,50 @@ const MetaSelect = ({ label, value, onChange, options, widthClass = "w-full" }: 
 const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-full" }: any) => (
   <div className={widthClass}>
     <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
-    <textarea value={value || ''} onChange={onChange} placeholder={placeholder} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium resize-y min-h-[60px] leading-relaxed" />
+    <textarea 
+      value={value || ''} 
+      onChange={onChange} 
+      placeholder={placeholder}
+      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:bg-white outline-none transition text-slate-800 font-medium resize-y min-h-[60px] leading-relaxed"
+    />
   </div>
 );
 
-// ---------------------------------------------------------------------------------
-// MÓDULOS DE PROCESSAMENTO ESPACIAL E TEXTUAL
-// ---------------------------------------------------------------------------------
-
-const normalizeText = (text: string) => {
-  return text
-    .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') // Separa número colado no nome (Capota1)
-    .replace(/([1-6])(PR|RC|RM|RO)/g, '$1 $2') // Separa grau + fase (5RO)
-    .replace(/(PR|RC|RM|RO)([1-6])/g, '$1 $2') // Separa fase + grau (RM5)
-    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/g, '$1') // Remove duplicações (RM RM)
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+const normalizeString = (str: string) => {
+  if (!str) return '';
+  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
 };
-
-const detectLayoutType = (text: string) => {
-  const t = text.toLowerCase();
-  if (t.includes('instrumento básico') || t.includes('capota') || t.includes('vi-01')) return 'VI';
-  if (t.includes('pré-solo') || t.includes('pre-solo') || t.includes('ps-')) return 'PRE';
-  return 'DEFAULT';
-};
-
-const classifyToken = (text: string) => {
-  if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
-  if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
-  if (/^[1-6]$/.test(text)) return 'grau';
-  if (/^\d{1,3}[-–—.:]?$/.test(text)) return 'numero'; 
-  return 'texto';
-};
-
-const detectColumns = (lines: any[][]) => {
-  const xs: number[] = [];
-  lines.forEach((l: any[]) => {
-    const lastTokens = l.slice(-3);
-    lastTokens.forEach((t: any) => {
-      const type = classifyToken(t.text.split(/\s+/)[0]);
-      if (type === 'fase' || type === 'grau') xs.push(t.x);
-    });
-  });
-  
-  if (xs.length === 0) return { fase: 9999, grau: 9999 };
-  xs.sort((a: number, b: number) => a - b);
-  
-  const clusters: number[][] = [];
-  xs.forEach((x: number) => {
-    let found = false;
-    for (let c of clusters) {
-      if (Math.abs(c[0] - x) < 35) { c.push(x); found = true; break; }
-    }
-    if (!found) clusters.push([x]);
-  });
-
-  const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
-  return {
-    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : (centers.length === 1 ? centers[0] - 15 : 9999),
-    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 9999
-  };
-};
-
-const refineColumns = (items: any[], columns: any) => {
-  const graus = items.filter(i => /^[1-6]$/.test(i.text.trim())).map(i => i.x);
-  if (graus.length > 5) {
-    const avg = graus.reduce((a, b) => a + b, 0) / graus.length;
-    columns.grau = avg - 15; 
-  }
-  return columns;
-};
-
-const buildLines = (items: any[]) => {
-  const map = new Map<number, any[]>();
-  items.forEach((i: any) => {
-    const y = Math.round(i.y / 5) * 5; 
-    if (!map.has(y)) map.set(y, []);
-    map.get(y)!.push(i);
-  });
-  return Array.from(map.entries()).sort((a, b) => b[0] - a[0]).map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
-};
-
-const isItemStart = (line: any[]) => {
-  if (!line || line.length === 0) return false;
-  const text = line.map(t => t.text).join(' ').trim();
-  if (/^\d{1,3}\s*[-–—.:]?\b/.test(text)) return true;
-  if (line.some(t => /^\d{1,3}$/.test(t.text))) {
-    const first = line[0].text;
-    if (!/^[a-zà-ÿ]/i.test(first)) return true;
-  }
-  return false;
-};
-
-const mergeBrokenLines = (lines: any[][]) => {
-  const merged: any[][] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const text = line.map((t: any) => t.text).join(' ').trim();
-
-    if (/^\d{1,3}$/.test(text)) {
-      merged.push([...line]);
-      continue;
-    }
-
-    if (merged.length === 0) {
-      merged.push([...line]);
-      continue;
-    }
-
-    const last = merged[merged.length - 1];
-
-    if (!isItemStart(line)) {
-      const dy = Math.abs(line[0].y - last[0].y);
-      if (dy < 12) {
-        last.push(...line);
-        last.sort((a: any, b: any) => a.x - b.x); 
-      } else {
-        merged.push([...line]);
-      }
-    } else {
-      merged.push([...line]);
-    }
-  }
-  return merged;
-};
-
-const findNearestGrau = (refToken: any, lineTokens: any[], columns: any) => {
-  let best = null;
-  let bestDist = Infinity;
-
-  lineTokens.forEach(t => {
-    if (!/^[1-6]$/.test(t.text.trim())) return;
-    const dy = Math.abs(t.y - refToken.y);
-    const dx = Math.abs(t.x - columns.grau);
-    if (dy > 6) return; 
-    
-    const dist = dx + (dy * 5); 
-    if (dist < bestDist) {
-      best = t;
-      bestDist = dist;
-    }
-  });
-
-  return best ? (best as any).text : '';
-};
-
-// ---------------------------------------------------------------------------------
-// EXTRATORES CONTÍNUOS
-// ---------------------------------------------------------------------------------
-
-const extractItemsFromLines = (lines: any[][], columns: any) => {
-  const items: any[] = [];
-  let current: any = null;
-  const limitX = Math.min(columns.fase, columns.grau);
-  
-  lines.forEach((line: any[]) => {
-    const startsItem = isItemStart(line);
-
-    if (startsItem) {
-      if (current && current.numero && current.nome.length > 2) {
-        current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-        items.push(current);
-      }
-      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: '--', grau: '', comentario: '' };
-    }
-
-    if (!current) return;
-
-    line.forEach((token: any) => {
-      const subTokens = token.text.split(/\s+/);
-
-      subTokens.forEach((subText: string) => {
-        if (/^[1-6]$/.test(subText)) {
-          current.grau = subText;
-        } else if (/^(PR|RC|RM|RO|--)$/i.test(subText)) {
-          current.fase = subText.toUpperCase();
-        } else if (/^\d{1,3}$/.test(subText.replace(/[-–—.:]/g, '')) && !current.numero) {
-          current.numero = subText.replace(/[-–—.:]/g, ''); 
-        } else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
-          if (subText === '-' && current.nome.length > 10) return; 
-          if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
-            if (token.x < limitX + 20) {
-              current.nome += (current.nome ? ' ' : '') + subText;
-            }
-          }
-        }
-      });
-    });
-
-    if (!current.grau && line.length > 0) {
-      const nearest = findNearestGrau(line[0], line, columns);
-      if (nearest) current.grau = nearest;
-    }
-  });
-
-  if (current && current.numero && current.nome.length > 2) {
-    current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-    items.push(current);
-  }
-
-  return items;
-};
-
-const extractItemsPreSolo = (lines: any[][], columns: any) => {
-  const items: any[] = [];
-  let current: any = null;
-  
-  lines.forEach((line: any[]) => {
-    const startsItem = isItemStart(line);
-
-    if (startsItem) {
-      if (current && current.numero && current.nome.length > 2) {
-        current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-        items.push(current);
-      }
-      current = { id: crypto.randomUUID(), numero: '', nome: '', fase: 'PR', grau: '', comentario: '' };
-    }
-
-    if (!current) return;
-
-    line.forEach((token: any) => {
-      const cleanText = token.text.trim();
-
-      if (/^[1-6]$/.test(cleanText)) {
-        current.grau = cleanText;
-      } else if (/^(PR|RC|RM|RO|--)$/i.test(cleanText)) {
-        // Assume default PR
-      } else if (/^\d{1,3}$/.test(cleanText.replace(/[-–—.:]/g, '')) && !current.numero) {
-        current.numero = cleanText.replace(/[-–—.:]/g, '');
-      } else {
-         if (cleanText === '-' && current.nome.length > 10) return;
-         current.nome += (current.nome ? ' ' : '') + cleanText;
-      }
-    });
-
-    if (!current.grau && line.length > 0) {
-      const nearest = findNearestGrau(line[0], line, columns);
-      if (nearest) current.grau = nearest;
-    }
-  });
-
-  if (current && current.numero && current.nome.length > 2) {
-    current.nome = current.nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-    items.push(current);
-  }
-
-  return items;
-};
-
-// ---------------------------------------------------------------------------------
-// FALLBACKS, COMPONENTES E UTILITÁRIOS
-// ---------------------------------------------------------------------------------
-
-const ultimateFallback = (items: any[], rawText: string) => {
-  const regex = /(\d{1,2})\s*[-–—.]?\s*(.*?)\s+(PR|RC|RM|RO)?\s*[\/\-]?\s*([1-6])\b/gi;
-  let match;
-  while ((match = regex.exec(rawText)) !== null) {
-    const numero = match[1];
-    let item = items.find(i => i.numero === numero);
-    if (item && !item.grau && match[4]) {
-      item.grau = match[4];
-    }
-  }
-  return items;
-};
-
-const computeConfidence = (item: any) => {
-  let score = 0;
-  if (item.numero) score += 0.3;
-  if (item.nome.length > 5) score += 0.3;
-  if (item.grau) score += 0.2;
-  if (item.fase && item.fase !== '--') score += 0.1;
-  if (item.comentario) score += 0.1;
-  return score;
-};
-
-const validateItems = (items: any[]) => {
-  const errors: any[] = [];
-  items.forEach(item => {
-    if (!item.numero && !/Afetivo|Cognitivo/i.test(item.nome)) errors.push({ type: 'SEM_NUMERO', item });
-    if (!item.grau) errors.push({ type: 'SEM_GRAU', item });
-  });
-  return errors;
-};
-
-const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: any[] }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    if (!pdf || !tokens.length) return;
-    
-    const render = async () => {
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 1.5 });
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
-
-      ctx.strokeStyle = 'red';
-      ctx.fillStyle = 'red';
-      ctx.font = '10px Arial';
-
-      tokens.forEach((t: any, i: number) => {
-        // Ajuste de eixo Y (PDF.js renderiza de baixo para cima)
-        const x = t.x * 1.5;
-        const y = viewport.height - (t.y * 1.5);
-        
-        ctx.strokeRect(x, y - 12, 30, 12);
-        ctx.fillText(`${i}`, x, y);
-      });
-    };
-
-    render();
-  }, [pdf, tokens]);
-
-  return (
-    <div className="w-full overflow-auto border border-slate-300 rounded-xl shadow-inner bg-slate-100 p-4">
-      <canvas ref={canvasRef} className="mx-auto bg-white shadow-md" />
-    </div>
-  );
-};
-
-// ---------------------------------------------------------------------------------
-// COMPONENTE PRINCIPAL (APP)
-// ---------------------------------------------------------------------------------
 
 export default function App() {
   const [status, setStatus] = useState('idle'); 
   const [items, setItems] = useState<any[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
+  
   const [showModal, setShowModal] = useState(false);
   const [modalState, setModalState] = useState('sending');
   const [modalMessage, setModalMessage] = useState('');
-  
-  const [debugMode, setDebugMode] = useState(false);
-  const [rawPdfTokens, setRawPdfTokens] = useState<any[]>([]);
-  const [pdfDocument, setPdfDocument] = useState<any>(null);
 
   const WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxLlUKIeUnaLW2VeWOpIG5ZtrrAFy_Qg9YQTq5fG4HrMUg7kt196zcFAt4jOjBrMsEE/exec";
 
-  const [meta, setMeta] = useState({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' });
+  const [meta, setMeta] = useState({
+    esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '',
+    grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: ''
+  });
 
   useEffect(() => {
-    document.body.style.display = 'block'; document.body.style.margin = '0'; document.documentElement.style.backgroundColor = '#f8fafc';
-    const rootNode = document.getElementById('root'); if (rootNode) rootNode.style.width = '100%';
+    document.body.style.display = 'block';
+    document.body.style.margin = '0';
+    document.documentElement.style.backgroundColor = '#f8fafc';
+    const rootNode = document.getElementById('root');
+    if (rootNode) {
+      rootNode.style.width = '100%';
+      rootNode.style.minHeight = '100vh';
+      rootNode.style.maxWidth = 'none';
+      rootNode.style.padding = '0';
+      rootNode.style.margin = '0';
+      rootNode.style.textAlign = 'left';
+    }
+
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
     script.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js'; };
@@ -446,12 +101,16 @@ export default function App() {
 
   const updateMeta = (field: string, value: string) => {
     if (field === 'aluno1p' || field === 'instrutor') value = value.toUpperCase().slice(0, 3);
-    setMeta(prev => { const newMeta = { ...prev, [field]: value }; if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) newMeta.grauMissao = ''; return newMeta; });
+    setMeta(prev => {
+      const newMeta = { ...prev, [field]: value };
+      if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) newMeta.grauMissao = '';
+      return newMeta;
+    });
   };
 
-  const processStructuredData = (rawItems: any[], fullText: string) => {
-    // 1. LIMPEZA GLOBAL (A sua ideia fantástica)
-    let globalCleanText = fullText
+  const processTextData = (text: string) => {
+    // 1. LIMPEZA GLOBAL
+    let globalCleanText = text
       .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
       .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
       .replace(/--- PAGE \d+ ---/gi, '')
@@ -459,270 +118,589 @@ export default function App() {
       .replace(/COMANDO DA AERONÁUTICA/gi, '')
       .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
       .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-      .replace(/PROT[\s.:]*\d+/gi, '');
+      .replace(/PROT[\s.:]*\d+/gi, ''); 
 
-    const layout = detectLayoutType(globalCleanText);
-    const cleanHeader = globalCleanText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
-    
-    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
+    // 2. EXTRAÇÃO DE METADADOS
+    const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
+    const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
+    const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+
+    const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
+    const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
+
     let tipoMissaoDetectado = 'Normal';
-    if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
-    else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
-    else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMET\b/i) || cleanHeader.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
-
-    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
-    let hdep = '', tev = '';
-    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
-    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1]; else hdep = times[0][1]; }
-
-    setMeta(prev => ({
-      ...prev,
-      missao: (cleanHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i)?.[1] || '').toUpperCase(),
-      data: cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)?.[1] || '',
-      fase: (cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i)?.[1] || '').replace(/["\n\r]/g, '').trim().toUpperCase(),
-      aeronave: cleanHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i)?.[1] || cleanHeader.match(/\b(13\d{2}|14\d{2})\b/)?.[1] || '',
-      pousos: cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i)?.[1] || '',
-      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : (matchGrauMissao ? matchGrauMissao[1] : ''),
-      tipoMissao: tipoMissaoDetectado, hdep, tev,
-      parecer: (globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
-    }));
-
-    // Removemos os tokens do texto global, mas mantemos o poder do algoritmo espacial
-    const normalized = rawItems.map((i: any) => ({ text: i.text.trim(), x: i.x, y: i.y })).filter((i: any) => i.text.length > 0);
-    const allLines = buildLines(normalized);
-
-    let tableLines: any[][] = [];
-    let isTable = false;
-    let tableFinished = false;
-
-    allLines.forEach((line: any[]) => {
-      const text = line.map((t: any) => t.text).join(' ');
-      if (/(Itens Afetivos|Cognitivos|Comentários:|Recomendações\/Parecer:|Ass\. Digital)/i.test(text)) { isTable = false; tableFinished = true; }
-      if (!tableFinished && /\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) isTable = true;
-      if (isTable) tableLines.push(line);
-    });
-
-    const leftLines: any[][] = [];
-    const rightLines: any[][] = [];
-    tableLines.forEach((line: any[]) => {
-      const left = line.filter((t: any) => t.x < 300);
-      const right = line.filter((t: any) => t.x >= 300);
-      if (left.length > 0) leftLines.push(left);
-      if (right.length > 0) rightLines.push(right);
-    });
-
-    const leftMerged = mergeBrokenLines(leftLines);
-    const rightMerged = mergeBrokenLines(rightLines);
-
-    let leftCols = detectColumns(leftMerged);
-    let rightCols = detectColumns(rightMerged);
-    
-    leftCols = refineColumns(normalized.filter((t:any) => t.x < 300), leftCols);
-    rightCols = refineColumns(normalized.filter((t:any) => t.x >= 300), rightCols);
-
-    let tableItems: any[] = [];
-    if (layout === 'PRE') {
-      tableItems = [...extractItemsPreSolo(leftMerged, leftCols), ...extractItemsPreSolo(rightMerged, rightCols)];
-    } else {
-      tableItems = [...extractItemsFromLines(leftMerged, leftCols), ...extractItemsFromLines(rightMerged, rightCols)];
+    if (singleLineHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
+    else if (singleLineHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
+    else if (singleLineHeader.match(/\bAbortiva\b/i) || singleLineHeader.match(/\bVMET\b/i) || singleLineHeader.match(/\bVMAT\b/i)) {
+      tipoMissaoDetectado = 'Abortiva';
     }
 
-    const afetivos: any[] = [];
+    const matchMissao = singleLineHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
+    const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
+
+    const matchData = singleLineHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const data = matchData ? matchData[1] : '';
+
+    const times = Array.from(singleLineHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
+    let hdep = '', tev = '';
+    if (times.length >= 2) {
+      hdep = times[0][1];
+      tev = times[times.length - 1][1]; 
+    } else if (times.length === 1) {
+      if (/TEV[^\d]*\d{2}:\d{2}/i.test(singleLineHeader)) tev = times[0][1];
+      else hdep = times[0][1];
+    }
+
+    let fase = '';
+    const matchFase = singleLineHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    if (matchFase) {
+      fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
+    }
+
+    const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
+    const aeronave = matchAeronave ? matchAeronave[1] : '';
+
+    const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
+    const pousos = matchPousos ? matchPousos[1] : '';
+
+    const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
+    let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+
+    setMeta(prev => ({
+      esquadrilha: prev.esquadrilha, 
+      aluno1p: prev.aluno1p,         
+      instrutor: prev.instrutor,     
+      fase, aeronave, data, missao,
+      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
+      tipoMissao: tipoMissaoDetectado,
+      pousos, hdep, tev,
+      parecer: parecerStr
+    }));
+
+    // 3. EXTRAÇÃO DAS TABELAS
+    const extractedItemsMap = new Map();
+
     const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
     const idxComentarios = globalCleanText.search(/Comentários:/i);
+
+    let tableStartIndex = 0;
+    const firstItemRegex = /(?:^|\n|\r|\s)\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i;
+    const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
+    if (firstItemMatch) {
+      tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
+    }
+
+    let tableEndIndex = globalCleanText.length;
+    if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
+    else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
+
+    // Isola a tabela e remove quebras de linha extras, transformando a tabela numa grande linha contínua
+    let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
+    // Regex para extrair cada item da tabela contínua
+    // Ele procura: Número -> traço(opcional) -> Nome da Manobra -> (PR ou (Fase Grau) ou Grau) -> até o próximo número ou fim
+    const tableItemsRegex = /\b(\d{1,2})\s*[-–—]?\s*([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/]+?)\s+(?:(\bPR\b)|(?:(RC\b|RM\b|RO\b|--)\s+)?([1-6]|N\/O|N\/A|NR|A\s*N\/|--))(?=\s|$|\b\d{1,2}\s*[-–—]?\s*[A-Za-zÀ-ÿ])/gi;
+    
+    let matchT1;
+    while ((matchT1 = tableItemsRegex.exec(cleanTableText)) !== null) {
+      const numero = matchT1[1].trim();
+      let nome = matchT1[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+      
+      const isPR = !!matchT1[3];
+      let faseItem = isPR ? 'PR' : (matchT1[4] || '--');
+      let grauItem = (isPR || !matchT1[5]) ? '' : matchT1[5].toUpperCase().trim();
+
+      const grauNorm = grauItem.replace(/\s+/g, '');
+      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
+        grauItem = '';
+      }
+
+      if (nome.length > 2) {
+        extractedItemsMap.set(numero, {
+          id: crypto.randomUUID(),
+          numero: numero,
+          nome: nome,
+          fase: faseItem.toUpperCase(),
+          grau: grauItem,
+          comentario: ''
+        });
+      }
+    }
+
+    // 4. ITENS AFETIVOS
+    let affectiveAreaText = '';
     if (idxAfetivos !== -1) {
-      const section = globalCleanText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : globalCleanText.length);
-      const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
-      let matchA;
-      while ((matchA = afetivoRegex.exec(section)) !== null) {
-        let rawNome = matchA[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
-        let grauA = matchA[2].toUpperCase().replace(/\s+/g, '');
-        let numeroA = '';
-        const numMatch = rawNome.match(/^(\d{1,2})\s*[-–—.:]?\s*(.*)$/);
-        if (numMatch) { numeroA = numMatch[1]; rawNome = numMatch[2].trim(); }
-        if (rawNome.length > 3 && !/esquadrão/i.test(rawNome)) {
-            afetivos.push({ id: crypto.randomUUID(), numero: numeroA, nome: rawNome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
+      const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
+      affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      
+      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2}|\b(?:Comentários|Debriefing|Preparo|Raciocínio|Adaptação|Progresso|Reação|Interesse|Iniciativa|Aplicação|Conhecimento|Briefing|Mentalidade))/gi;
+      let matchT2;
+      
+      while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
+        let itemName = matchT2[1].trim();
+        let itemGrau = matchT2[2].toUpperCase();
+
+        const itemGrauNorm = itemGrau.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(itemGrauNorm)) {
+          itemGrau = '';
+        }
+
+        if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
+          const grauTextToRemove = matchT2[2].toUpperCase();
+          itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
+
+          if(itemName){
+            extractedItemsMap.set(itemName, {
+              id: crypto.randomUUID(),
+              numero: '', 
+              nome: itemName,
+              fase: '--',
+              grau: itemGrau, 
+              comentario: ''
+            });
+          }
         }
       }
     }
 
-    const comments: any[] = [];
-    // A sua Regex unificada poderosa
-    const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
-    const matches: any[] = [];
-    let commentMatch;
-    
-    while ((commentMatch = commentRegex.exec(globalCleanText)) !== null) {
-      matches.push({ index: commentMatch.index, length: commentMatch[0].length, numero: commentMatch[1].trim(), nome: commentMatch[2].trim(), insideParens: commentMatch[3] ? commentMatch[3].toUpperCase() : '' });
-    }
+    let finalItems = Array.from(extractedItemsMap.values());
 
-    for (let i = 0; i < matches.length; i++) {
-      const current = matches[i];
-      const start = current.index + current.length;
-      let end = i + 1 < matches.length ? matches[i+1].index : globalCleanText.length;
-      const assIdx = globalCleanText.indexOf('Ass. Digital', start);
-      const recIdx = globalCleanText.indexOf('Recomendações/Parecer:', start);
-      if (assIdx !== -1 && assIdx < end) end = assIdx;
-      if (recIdx !== -1 && recIdx < end) end = recIdx;
+    // 5. COMENTÁRIOS E INTEGRAÇÃO FINAL
+    if (idxComentarios !== -1) {
+      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-      let fase = '--', grau = '';
-      if (current.insideParens.includes('/')) {
-         const parts = current.insideParens.split('/'); fase = parts[0].trim() || '--'; grau = parts[1].trim();
-      } else if (current.insideParens === 'PR') fase = 'PR';
-      else if (/^[1-6]$/.test(current.insideParens)) grau = current.insideParens;
-      else fase = current.insideParens;
+      const allCommentMatches: any[] = [];
 
-      if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grau.replace(/\s+/g, ''))) grau = '';
+      // Regex flexível para o título do comentário
+      const unifiedCommentRegex = /(?:^|\W)(\d{1,2})\s*[-–—]\s*(.+?)\s*\(\s*([^)]+)\s*\)\s*:?/gi;
+      let matchC;
       
-      let rawComentario = globalCleanText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
-      comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: rawComentario });
-    }
+      while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
+        const num = matchC[1].trim();
+        const nomeC = matchC[2].trim(); 
+        let rawFaseC = '--';
+        let rawGrauC = '';
+        const insideParens = matchC[3].toUpperCase();
 
-    let finalItems = [...tableItems, ...afetivos]; 
-    comments.forEach((c: any) => {
-      let target = finalItems.find((it: any) => it.numero === c.numero);
-      
-      if (!target) {
-        target = finalItems.find((item: any) => {
-             const n1 = normalizeString(item.nome);
-             const n2 = normalizeString(c.nome);
-             return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
+        if (insideParens.includes('/')) {
+           const parts = insideParens.split('/');
+           rawFaseC = parts[0].trim() || '--';
+           rawGrauC = parts[1].trim();
+        } else {
+           const val = insideParens.trim();
+           if (val === 'PR') {
+              rawFaseC = 'PR';
+           } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
+              rawGrauC = val;
+           } else {
+              rawFaseC = val;
+           }
+        }
+
+        if (rawFaseC === 'PR') rawGrauC = '';
+        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
+          rawGrauC = '';
+        }
+
+        allCommentMatches.push({
+          index: matchC.index,
+          length: matchC[0].length,
+          numero: num,
+          nome: nomeC, 
+          fase: rawFaseC,
+          grau: rawGrauC
+        });
+      }
+
+      allCommentMatches.sort((a, b) => a.index - b.index);
+
+      for (let i = 0; i < allCommentMatches.length; i++) {
+        const currentMatch = allCommentMatches[i];
+        const startIndex = currentMatch.index + currentMatch.length;
+        let endIndex;
+
+        if (i + 1 < allCommentMatches.length) {
+          endIndex = allCommentMatches[i + 1].index;
+        } else {
+          const assDigitalIndex = cleanComments.indexOf('Ass. Digital', startIndex);
+          const recomendacoesIndex = cleanComments.indexOf('Recomendações/Parecer:', startIndex);
+          
+          if (assDigitalIndex !== -1 && recomendacoesIndex !== -1) endIndex = Math.min(assDigitalIndex, recomendacoesIndex);
+          else if (assDigitalIndex !== -1) endIndex = assDigitalIndex;
+          else if (recomendacoesIndex !== -1) endIndex = recomendacoesIndex;
+          else endIndex = cleanComments.length;
+        }
+
+        let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
+
+        // LÓGICA DE MATCH (Tabela <-> Comentário)
+        let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
+        
+        if (!foundItem) {
+          foundItem = finalItems.find((item: any) => {
+            const n1 = normalizeString(item.nome);
+            const n2 = normalizeString(currentMatch.nome);
+            return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
           });
-      }
+        }
 
-      if (target) {
-        target.comentario = c.comentario || target.comentario;
-        // A sua Safety Net!
-        if (!target.grau && c.grau && c.grau !== 'PR') target.grau = c.grau;
-        if (target.fase === '--' && c.fase !== '--') target.fase = c.fase;
-        if (c.grau === 'PR') target.fase = 'PR';
-        if (!target.numero) target.numero = c.numero;
-      } else {
-        finalItems.push({ id: crypto.randomUUID(), numero: c.numero, nome: c.nome, fase: c.fase || '--', grau: c.grau || '', comentario: c.comentario });
+        if (foundItem) {
+          foundItem.comentario = comentarioText;
+          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
+          
+          // SAFETY NET: Se a tabela não pegou o grau/fase, pega do título do comentário
+          if (!foundItem.grau && currentMatch.grau) foundItem.grau = currentMatch.grau;
+          if (foundItem.fase === '--' && currentMatch.fase !== '--') foundItem.fase = currentMatch.fase;
+        } else {
+          finalItems.push({
+            id: crypto.randomUUID(),
+            numero: currentMatch.numero,
+            nome: currentMatch.nome,
+            fase: currentMatch.fase,
+            grau: currentMatch.grau,
+            comentario: comentarioText
+          });
+        }
       }
+    }
+
+    finalItems.sort((a: any, b: any) => {
+      const numA = parseInt(a.numero);
+      const numB = parseInt(b.numero);
+      if (isNaN(numA) && isNaN(numB)) return 0;
+      if (isNaN(numA)) return 1; 
+      if (isNaN(numB)) return -1;
+      return numA - numB;
     });
 
-    finalItems = ultimateFallback(finalItems, globalCleanText);
-
-    finalItems = finalItems
-      .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
-      .map(i => ({ ...i, confidence: computeConfidence(i) }))
-      .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
-
-    const errors = validateItems(finalItems);
-    if (errors.length > 0) console.warn("Inconsistências detectadas na estrutura:", errors);
-
-    if (finalItems.length > 0) { setItems(finalItems); setStatus('reviewing'); setErrorMsg(''); } 
-    else { setErrorMsg('Falha na extração. O PDF pode não estar no padrão esperado.'); setStatus('idle'); }
+    if (finalItems.length > 0) {
+      setItems(finalItems);
+      setStatus('reviewing');
+      setErrorMsg('');
+    } else {
+      setErrorMsg('Não foi possível extrair os itens. O PDF pode não estar no padrão esperado.');
+      setStatus('idle');
+    }
   };
 
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
-    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false);
-    if (file.type !== 'application/pdf') { setErrorMsg('Formato inválido. Selecione um documento PDF.'); setStatus('idle'); return; }
-    if (!window.pdfjsLib) { setErrorMsg('Módulo de leitura indisponível. Recarregue a página.'); setStatus('idle'); return; }
+    if (!file) return;
 
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      setPdfDocument(pdf);
-      
-      const rawItems: any[] = [];
-      let fullText = '';
+    e.target.value = ''; 
+    setStatus('loading');
+    setErrorMsg('');
 
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageOffsetY = (pdf.numPages - i) * 3000; 
-
-        rawItems.push(...textContent.items.map((it: any) => ({ text: normalizeText(it.str), x: it.transform[4], y: it.transform[5] + pageOffsetY })));
-        
-        let sortedForText = [...textContent.items].sort((a: any, b: any) => {
-          if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
-          return a.transform[4] - b.transform[4];
-        });
-        
-        let lastY = null;
-        for (const it of sortedForText) {
-           if (lastY !== null && Math.abs(it.transform[5] - lastY) > 5) fullText += '\n';
-           else if (lastY !== null) fullText += ' ';
-           fullText += normalizeText(it.str); lastY = it.transform[5];
-        }
-        fullText += '\n\n';
+    if (file.type === 'application/pdf') {
+      if (!window.pdfjsLib) {
+        setErrorMsg('Carregando biblioteca... Tente novamente em 2 segundos.');
+        setStatus('idle');
+        return;
       }
-      setRawPdfTokens(rawItems.filter((t:any) => t.y < 3000)); // Limita visualização de debug à primeira página
-      processStructuredData(rawItems, fullText);
-    } catch (err) { setErrorMsg('Falha no processamento. Documento corrompido ou inacessível.'); setStatus('idle'); }
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+        
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          
+          const items = textContent.items as any[];
+          
+          items.sort((a, b) => {
+            if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
+              return b.transform[5] - a.transform[5];
+            }
+            return a.transform[4] - b.transform[4];
+          });
+
+          let lastY = null;
+          let pageText = '';
+          for (let item of items) {
+            if (lastY !== null && Math.abs(lastY - item.transform[5]) > 5) {
+              pageText += '\n';
+            } else if (lastY !== null) {
+              pageText += ' '; 
+            }
+            pageText += item.str.trim();
+            lastY = item.transform[5];
+          }
+          pageText = pageText.replace(/ {2,}/g, ' ');
+          fullText += pageText + '\n\n';
+        }
+        processTextData(fullText);
+      } catch (err) {
+        console.error(err);
+        setErrorMsg('Erro ao ler o arquivo PDF.');
+        setStatus('idle');
+      }
+    } else {
+      setErrorMsg('Por favor, selecione um arquivo PDF válido.');
+      setStatus('idle');
+    }
   };
 
-  const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
-  const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Registro Manual', fase: '--', grau: '', comentario: '', confidence: 1.0 }]);
+  const updateItem = (id: string, field: string, value: string) => {
+    setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
+  };
 
-  const buildPayload = () => items.map((item: any) => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
+  const removeItem = (id: string) => {
+    setItems(items.filter((item: any) => item.id !== id));
+  };
 
-  const exportCSV = () => {
-    const hdrs = ['Data', 'Esquadrilha', 'Missão', 'Grau Missão', '1P / AL', 'IN', 'Fase Missão', 'Anv', 'H.Dep', 'Pousos', 'TEV', 'Parecer', 'Nº Item', 'Nome', 'Fase Item', 'Grau/Menção', 'Comentário', 'Tipo'];
-    const csvContent = [ hdrs.join(','), ...buildPayload().map(r => `"${r.data}","${r.esquadrilha}","${r.missao}","${r.grauMissao}","${r.aluno1p}","${r.instrutor}","${r.faseMissao}","${r.aeronave}","${r.hdep}","${r.pousos}","${r.tev}","${(r.parecer || '').replace(/"/g, '""')}","${r.numero}","${r.nome}","${r.faseItem}","${r.grau}","${(r.comentario || '').replace(/"/g, '""')}","${r.tipoMissao}"`) ].join('\n');
+  const addNewItem = () => {
+    setItems([...items, {
+      id: crypto.randomUUID(),
+      numero: '',
+      nome: 'Novo Item',
+      fase: '',
+      grau: '',
+      comentario: ''
+    }]);
+  };
+
+  const buildPayloadData = () => {
+    return items.map(item => ({
+      data: meta.data,
+      esquadrilha: meta.esquadrilha,
+      missao: meta.missao,
+      grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao,
+      aluno1p: meta.aluno1p,
+      instrutor: meta.instrutor,
+      faseMissao: meta.fase,
+      aeronave: meta.aeronave,
+      hdep: meta.hdep,
+      pousos: meta.pousos,
+      tev: meta.tev,
+      parecer: meta.parecer,
+      numero: item.numero,
+      nome: item.nome,
+      faseItem: item.fase,
+      grau: item.grau,
+      comentario: item.comentario,
+      tipoMissao: meta.tipoMissao 
+    }));
+  };
+
+  const exportToCSV = () => {
+    const headers = [
+      'Data da Missão', 'Esquadrilha', 'Missão', 'Grau da Missão', '1P / AL', 'IN', 'Fase da Missão', 'Aeronave', 'H. Dep', 'Pousos', 'TEV',
+      'Parecer/Recomendações', 'Nº do Item', 'Nome da Manobra/Item', 'Fase do Item', 'Grau/Menção', 'Comentário', 'Tipo de Missão'
+    ];
+    
+    const payload = buildPayloadData();
+
+    const csvContent = [
+      headers.join(','),
+      ...payload.map(row => {
+        const cleanComentario = row.comentario ? row.comentario.replace(/"/g, '""') : ''; 
+        const cleanParecer = row.parecer ? row.parecer.replace(/"/g, '""') : ''; 
+        return `"${row.data}","${row.esquadrilha}","${row.missao}","${row.grauMissao}","${row.aluno1p}","${row.instrutor}","${row.faseMissao}","${row.aeronave}","${row.hdep}","${row.pousos}","${row.tev}","${cleanParecer}","${row.numero}","${row.nome}","${row.faseItem}","${row.grau}","${cleanComentario}","${row.tipoMissao}"`;
+      })
+    ].join('\n');
+
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const lnk = document.createElement('a'); lnk.href = URL.createObjectURL(blob); lnk.setAttribute('download', `Ficha_${meta.missao || 'Extracao'}_${new Date().toISOString().slice(0,10)}.csv`); lnk.click();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Ficha_${meta.missao || 'Extraida'}_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
-  const sendWebhook = async () => {
-    if (!meta.esquadrilha) { setErrorMsg('Obrigatório informar a Esquadrilha.'); window.scrollTo(0, 0); return; }
-    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Obrigatório informar trigramas de Aluno e Instrutor.'); window.scrollTo(0, 0); return; }
-    setModalState('sending'); setShowModal(true);
+  const sendToGoogleSheets = async () => {
+    if (!meta.esquadrilha) {
+      setErrorMsg('Atenção: Por favor, selecione a Esquadrilha antes de enviar para a base de dados.');
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (!meta.aluno1p || !meta.instrutor) {
+       setErrorMsg('Atenção: Preencha o trigrama do 1P/AL e do IN antes de enviar.');
+       window.scrollTo(0, 0);
+       return;
+    }
+
+    setModalState('sending');
+    setShowModal(true);
+
     try {
-      const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(buildPayload()) });
-      if (res.ok) { setModalState('success'); setModalMessage('Integração concluída com sucesso.'); } 
-      else throw new Error('A requisição falhou.');
-    } catch { setModalState('error'); setModalMessage('Erro de conexão. A exportação manual em CSV continua disponível.'); }
+      const payload = buildPayloadData();
+      
+      const response = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        setModalState('success');
+        setModalMessage('Ficha salva com sucesso no Banco de Instrução!');
+      } else {
+        throw new Error('Falha na comunicação com a planilha.');
+      }
+    } catch (error) {
+      console.error(error);
+      setModalState('error');
+      setModalMessage('Ocorreu um erro de rede. Verifique a sua conexão de internet e tente novamente.');
+    }
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
+  const closeModalAndReset = () => {
+    setShowModal(false);
+    if (modalState === 'success') {
+      setStatus('idle');
+      setItems([]);
+    }
+  };
+
+  const isGrauDisabled = meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra';
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
+      
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
-            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando com a base de dados...</p></>)}
-            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Extração</button></>)}
-            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Aviso</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4 transition-all">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center transform scale-100 animate-in fade-in zoom-in duration-200">
+            
+            {modalState === 'sending' && (
+              <>
+                <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6">
+                  <RefreshCw size={40} className="animate-spin" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Enviando Dados...</h2>
+                <p className="text-slate-500 mb-4">Salvando todos os itens da ficha de voo no banco de instrução.</p>
+                <div className="bg-amber-50 text-amber-700 border border-amber-200 text-sm font-medium px-4 py-3 rounded-lg flex items-center justify-center gap-2 w-full">
+                  <AlertCircle size={18} />
+                  Por favor, não feche esta página.
+                </div>
+              </>
+            )}
+
+            {modalState === 'success' && (
+              <>
+                <div className="w-20 h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mb-6">
+                  <CheckCircle2 size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Concluído!</h2>
+                <p className="text-slate-500 mb-8">{modalMessage}</p>
+                <button 
+                  onClick={closeModalAndReset}
+                  className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg"
+                >
+                  Inserir Próxima Ficha
+                </button>
+              </>
+            )}
+
+            {modalState === 'error' && (
+              <>
+                <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mb-6">
+                  <XCircle size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Erro no Envio</h2>
+                <p className="text-slate-500 mb-8">{modalMessage}</p>
+                <button 
+                  onClick={() => setShowModal(false)}
+                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 px-6 rounded-xl transition"
+                >
+                  Fechar e Tentar Novamente
+                </button>
+              </>
+            )}
+
           </div>
         </div>
       )}
-      
-      <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
-        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
-          <div className="flex items-center gap-5">
-            <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-            <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento de Fichas de Avaliação.</p></div>
+
+      <div className={`max-w-6xl mx-auto transition-opacity ${showModal ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+        
+        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0">
+              <FileText size={28} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Extrator de Fichas de Voo</h1>
+              <p className="text-slate-500">Sistema automatizado para instrução aérea.</p>
+            </div>
           </div>
         </header>
 
-        {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
-        
-        {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura detecta automaticamente a estrutura do documento.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+        {errorMsg && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-700">
+            <AlertCircle className="shrink-0 mt-0.5" size={20} />
+            <p>{errorMsg}</p>
+          </div>
         )}
-        
-        {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Mapeamento vetorial e reconciliação de dados ativados...</p></div>
-        )}
-        
-        {status === 'reviewing' && (
-          <div className="space-y-6 relative z-10">
 
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
-              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho da Missão</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
-                <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
+        {status === 'idle' && (
+          <div className="flex justify-center">
+            <div className="bg-white p-10 md:p-16 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center text-center w-full max-w-2xl">
+              <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6">
+                <Upload size={40} />
+              </div>
+              <h2 className="text-2xl font-semibold mb-3">Inserir Arquivo PDF</h2>
+              <p className="text-slate-500 text-base mb-8 max-w-md">
+                Selecione o arquivo da ficha de voo gerada pelo sistema. A leitura será feita de forma automática e à prova de falhas.
+              </p>
+              <label className="bg-blue-600 hover:bg-blue-700 transition text-white px-8 py-4 rounded-xl font-medium cursor-pointer shadow-sm text-lg flex items-center gap-3">
+                <FileText size={24} />
+                Selecionar PDF
+                <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => { e.target.value = '' }} onChange={handleFileUpload} />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {status === 'loading' && (
+          <div className="bg-white p-16 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center text-center">
+            <RefreshCw className="text-blue-600 animate-spin mb-4" size={40} />
+            <h2 className="text-xl font-semibold">Analisando a Ficha...</h2>
+            <p className="text-slate-500">Extraindo cabeçalho, tabelas e comentários.</p>
+          </div>
+        )}
+
+        {status === 'reviewing' && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <FileText className="text-blue-500" size={20} /> Dados da Missão
+                </h3>
+                <span className="text-xs font-semibold bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                  Esses dados acompanharão todas as linhas no banco de dados
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <MetaSelect 
+                  label="Esquadrilha *" 
+                  value={meta.esquadrilha} 
+                  onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} 
+                  options={['Antares', 'Vega', 'Castor', 'Sirius']} 
+                />
                 <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
-                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="MOT" />
+                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="HNI" />
                 <MetaInput label="Missão" value={meta.missao} onChange={(e: any) => updateMeta('missao', e.target.value)} />
-                <MetaInput label="Grau Missão" value={meta.grauMissao} onChange={(e: any) => updateMeta('grauMissao', e.target.value)} disabled={meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra'} />
-                <MetaSelect label="Tipo Missão" value={meta.tipoMissao} onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} options={['Normal', 'Abortiva', 'Extra', 'Revisão']} />
+                <MetaInput 
+                  label="Grau da Missão" 
+                  value={isGrauDisabled ? '' : meta.grauMissao} 
+                  onChange={(e: any) => updateMeta('grauMissao', e.target.value)} 
+                  disabled={isGrauDisabled}
+                  title={isGrauDisabled ? 'Missões Abortivas ou Extras não possuem grau.' : ''}
+                />
+                <MetaSelect 
+                  label="Tipo de Missão" 
+                  value={meta.tipoMissao} 
+                  onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} 
+                  options={['Normal', 'Abortiva', 'Extra', 'Revisão']} 
+                />
                 <MetaInput label="Data" value={meta.data} onChange={(e: any) => updateMeta('data', e.target.value)} />
                 <MetaInput label="Fase" value={meta.fase} onChange={(e: any) => updateMeta('fase', e.target.value)} />
                 <MetaInput label="Aeronave" value={meta.aeronave} onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
@@ -730,39 +708,135 @@ export default function App() {
                 <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
                 <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de observações operacionais..." /></div>
+
+              <div className="mt-4 pt-4 border-t border-slate-100">
+                <MetaTextarea 
+                  label="Parecer do Comandante / Recomendações" 
+                  value={meta.parecer} 
+                  onChange={(e: any) => updateMeta('parecer', e.target.value)} 
+                  placeholder="Se houver recomendações no fim da ficha, aparecerão aqui..." 
+                />
+              </div>
             </div>
-            
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela de Avaliação ({items.length} itens)</h2>
-                <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); setErrorMsg(''); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
-                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
-                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Salvar Registros</button>
+
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50/50">
+                <div>
+                  <h2 className="text-xl font-semibold text-slate-900 flex items-center gap-2">
+                    <Check className="text-green-500" size={24} /> 
+                    {items.length} Itens Encontrados
+                  </h2>
+                  <p className="text-slate-500 text-sm mt-1">Revise as avaliações antes de enviar para a base.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button 
+                    onClick={() => { setStatus('idle'); setErrorMsg(''); setItems([]); }}
+                    className="px-4 py-3 text-sm font-medium text-slate-600 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition"
+                  >
+                    Voltar / Cancelar
+                  </button>
+                  <button 
+                    onClick={exportToCSV}
+                    className="px-4 py-3 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition flex items-center gap-2"
+                  >
+                    <Download size={18} /> Exportar (CSV)
+                  </button>
+                  <button 
+                    onClick={sendToGoogleSheets}
+                    className="px-8 py-3 text-base font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-lg flex items-center gap-2"
+                  >
+                    <Zap size={20} /> Enviar para o Banco
+                  </button>
                 </div>
               </div>
-              <div className="p-7 overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Item</th><th className="p-3">Manobra / Competência</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
-                  <tbody className="text-sm">
-                    {items.map((it) => (
-                      <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
-                        <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item de avaliação..." /></td>
-                        <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
-                        <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar dados..." /></td>
-                        <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
-                      </tr>
-                    ))}
+
+              <div className="p-6 overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[800px]">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 text-sm">
+                      <th className="p-3 font-medium w-16">Nº</th>
+                      <th className="p-3 font-medium w-48">Nome da Manobra/Item</th>
+                      <th className="p-3 font-medium w-20">Fase</th>
+                      <th className="p-3 font-medium w-24">Grau</th>
+                      <th className="p-3 font-medium">Comentário</th>
+                      <th className="p-3 font-medium w-12 text-center">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="align-top text-sm">
+                    {items.map((item) => {
+                      const gradeColorClass = getGradeColorClass(item.grau);
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition">
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.numero} 
+                              onChange={(e) => updateItem(item.id, 'numero', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.nome} 
+                              onChange={(e) => updateItem(item.id, 'nome', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 ${gradeColorClass}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.fase} 
+                              onChange={(e) => updateItem(item.id, 'fase', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-center text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.grau} 
+                              disabled={item.fase === 'PR'}
+                              title={item.fase === 'PR' ? "Itens PR não recebem nota." : ""}
+                              onChange={(e) => updateItem(item.id, 'grau', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 uppercase ${gradeColorClass} ${item.fase === 'PR' ? 'cursor-not-allowed opacity-50 bg-slate-100/50' : ''}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <textarea 
+                              value={item.comentario} 
+                              onChange={(e) => updateItem(item.id, 'comentario', e.target.value)}
+                              placeholder="Sem comentários para este item"
+                              className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white focus:shadow-sm outline-none px-2 py-1 rounded resize-y min-h-[40px] leading-relaxed ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`}
+                            />
+                          </td>
+                          <td className="p-3 text-center">
+                            <button 
+                              onClick={() => removeItem(item.id)}
+                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition"
+                              title="Remover Item"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserir Linha Manual</button></div>
+                
+                <div className="mt-4 flex justify-center border-t border-slate-100 pt-4">
+                  <button 
+                    onClick={addNewItem}
+                    className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-medium px-4 py-2 hover:bg-blue-50 rounded-lg transition"
+                  >
+                    <Plus size={16} /> Adicionar Item Manualmente
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
