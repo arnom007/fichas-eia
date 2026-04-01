@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle } from 'lucide-react';
+import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -45,19 +45,95 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 );
 
 // ---------------------------------------------------------------------------------
-// ARQUITETURA DEFINITIVA: MÉTODOS DE EXTRAÇÃO E BLINDAGEM
+// 🚀 MODO DEUS: ENGINE DE PARSING ESPACIAL COMPLETA
 // ---------------------------------------------------------------------------------
+
+const DebugOverlay = ({ tokens }: { tokens: any[] }) => {
+  return (
+    <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden opacity-50">
+      {tokens.map((t: any, i: number) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: t.x * 1.5, // Fator de escala aproximado
+            bottom: (t.y * 1.5) - 100, // Ajuste de renderização PDF.js (y começa de baixo)
+            border: '1px solid red',
+            fontSize: '8px',
+            color: 'red',
+            background: 'rgba(255,0,0,0.1)',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {t.text}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const detectLayoutType = (text: string) => {
+  const t = text.toLowerCase();
+  if (t.includes('instrumento básico') || t.includes('capota') || t.includes('vi-01')) return 'VI';
+  if (t.includes('pré-solo') || t.includes('pre-solo') || t.includes('ps-')) return 'PRE';
+  return 'DEFAULT';
+};
+
+const classifyToken = (text: string) => {
+  if (/^(PR|RC|RM|RO)$/i.test(text)) return 'fase';
+  if (/^(N\/A|N\/O|NR|--|AN\/)$/i.test(text)) return 'ignore';
+  if (/^[1-6]$/.test(text)) return 'grau';
+  if (/^\d{1,2}[-–—.:]?$/.test(text)) return 'numero'; 
+  if (/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i.test(text)) return 'fase_grau';
+  return 'texto';
+};
+
+const detectColumns = (lines: any[][]) => {
+  const xs: number[] = [];
+  lines.forEach((l: any[]) => {
+    const lastTokens = l.slice(-3);
+    lastTokens.forEach((t: any) => {
+      const type = classifyToken(t.text.replace(/^(\d{1,2})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2').split(/\s+/)[0]);
+      if (type === 'fase' || type === 'grau' || type === 'fase_grau') xs.push(t.x);
+    });
+  });
+  
+  if (xs.length === 0) return { fase: 9999, grau: 9999 };
+  xs.sort((a: number, b: number) => a - b);
+  
+  const clusters: number[][] = [];
+  xs.forEach((x: number) => {
+    let found = false;
+    for (let c of clusters) {
+      if (Math.abs(c[0] - x) < 35) { c.push(x); found = true; break; }
+    }
+    if (!found) clusters.push([x]);
+  });
+
+  const centers = clusters.map((c: number[]) => c.reduce((a, b) => a + b, 0) / c.length).sort((a, b) => a - b);
+  return {
+    fase: centers.length >= 2 ? centers[centers.length - 2] - 15 : (centers.length === 1 ? centers[0] - 15 : 9999),
+    grau: centers.length >= 1 ? centers[centers.length - 1] - 15 : 9999
+  };
+};
+
+const refineColumns = (items: any[], columns: any) => {
+  const graus = items.filter(i => /^[1-6]$/.test(i.text.trim())).map(i => i.x);
+  if (graus.length > 5) {
+    const avg = graus.reduce((a, b) => a + b, 0) / graus.length;
+    columns.grau = avg - 15; // Refina a posição da coluna grau
+  }
+  return columns;
+};
 
 const buildLines = (items: any[]) => {
   const map = new Map<number, any[]>();
   items.forEach((i: any) => {
-    const y = Math.round(i.y / 4) * 4; 
+    const y = Math.round(i.y / 5) * 5; 
     if (!map.has(y)) map.set(y, []);
     map.get(y)!.push(i);
   });
-  return Array.from(map.entries())
-    .sort((a, b) => b[0] - a[0]) 
-    .map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
+  return Array.from(map.entries()).sort((a, b) => b[0] - a[0]).map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
 };
 
 const mergeBrokenLines = (lines: any[][]) => {
@@ -65,9 +141,7 @@ const mergeBrokenLines = (lines: any[][]) => {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const firstText = line[0]?.text || '';
-    
-    // Exige que a linha comece estritamente com números de 1 a 59 para ser um novo item
-    const startsWithValidNum = /^\s*(0?[1-9]|[1-5][0-9])\b\s*[-–—.:]?/.test(firstText);
+    const startsWithValidNum = /^\s*(\d{1,2})\b\s*[-–—.:]?/.test(firstText);
     
     if (!startsWithValidNum && merged.length > 0) {
       merged[merged.length - 1].push(...line);
@@ -79,54 +153,143 @@ const mergeBrokenLines = (lines: any[][]) => {
   return merged;
 };
 
-const extractItemsFromLines = (lines: any[][]) => {
+// 🎯 O Fallback Geométrico (Busca por proximidade horizontal)
+const findNearestGrau = (refToken: any, lineTokens: any[], columns: any) => {
+  let best = null;
+  let bestDist = Infinity;
+
+  lineTokens.forEach(t => {
+    if (!/^[1-6]$/.test(t.text.trim())) return;
+    const dy = Math.abs(t.y - refToken.y);
+    const dx = Math.abs(t.x - columns.grau);
+    if (dy > 8) return; // Tem que estar na mesma linha (tolerância de 8px)
+    
+    const dist = dx + (dy * 5); // Penaliza muito a distância Y
+    if (dist < bestDist) {
+      best = t;
+      bestDist = dist;
+    }
+  });
+
+  return best ? (best as any).text : '';
+};
+
+// 🎯 Extrator Genérico (VI)
+const extractItemsFromLines = (lines: any[][], columns: any) => {
   const items: any[] = [];
+  const limitX = Math.min(columns.fase, columns.grau);
   
   lines.forEach((line: any[]) => {
-    // Junta a linha inteira da coluna
-    let text = line.map((t: any) => t.text).join(' ');
-    
-    // Resolve erros de OCR colados: "10Tráfego" -> "10 Tráfego"
-    text = text.replace(/^((?:0?[1-9]|[1-5][0-9]))[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2');
+    let numero = ''; let nome = ''; let fase = '--'; let grau = '';
 
-    // 🟢 REGRA INFALÍVEL: Extrai a Fase e o Grau estritamente pelo FINAL da string!
-    // Evita falsos positivos como a palavra "PR" no meio de um comentário.
-    const endRegex = /(.*?)\s+(?:(PR)|(RC|RM|RO|--)\s*[\/\-]?\s*([1-6]|N\/O|N\/A|NR|A\s*N\/|--)|(RC|RM|RO|--)|([1-6]|N\/O|N\/A|NR|A\s*N\/|--))\s*$/i;
+    line.forEach((token: any) => {
+      const cleanText = token.text.replace(/^(\d{1,2})[-–—.:]?([A-Za-zÀ-ÿ])/i, '$1 $2');
+      const subTokens = cleanText.split(/\s+/);
 
-    let nome = text;
-    let fase = '--';
-    let grau = '';
+      subTokens.forEach((subText: string) => {
+        const type = classifyToken(subText);
+        const isFarRight = token.x >= limitX - 40; 
 
-    const endMatch = text.match(endRegex);
-    if (endMatch) {
-      nome = endMatch[1].trim();
-      if (endMatch[2]) fase = 'PR';
-      else if (endMatch[3]) { fase = endMatch[3].toUpperCase(); grau = endMatch[4].toUpperCase(); }
-      else if (endMatch[5]) fase = endMatch[5].toUpperCase();
-      else if (endMatch[6]) grau = endMatch[6].toUpperCase();
-    }
+        if (type === 'fase_grau' && isFarRight) {
+          const pgMatch = subText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
+          if (pgMatch) { fase = pgMatch[1].toUpperCase(); if (pgMatch[2]) grau = pgMatch[2].toUpperCase(); }
+        } else if (type === 'fase' && isFarRight) {
+          fase = subText.toUpperCase();
+        } else if (type === 'grau') {
+          // Aceita grau mesmo um pouco deslocado, desde que seja do tipo correto
+          grau = subText.toUpperCase(); 
+        } else if (type === 'numero' && !numero) {
+          numero = subText.replace(/[-–—.:]/g, ''); 
+        } else if (!/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
+          nome += (nome ? ' ' : '') + subText;
+        }
+      });
+    });
 
-    // Extrai o número e limpa o nome
-    let numero = '';
-    const startRegex = /^(0?[1-9]|[1-5][0-9])\s*[-–—.:]?\s*(.*)$/;
-    const startMatch = nome.match(startRegex);
-
-    if (startMatch) {
-      numero = startMatch[1];
-      nome = startMatch[2].trim();
+    // Se falhou em achar o grau, roda o Fallback Geométrico
+    if (!grau && line.length > 0) {
+      grau = findNearestGrau(line[0], line, columns);
     }
 
     nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+    if (numero && nome.length >= 2) items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
+  });
 
-    if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grau.replace(/\s+/g, ''))) grau = '';
+  return items;
+};
 
-    // Só adiciona se o nome for válido e tiver número
-    if (numero && nome.length >= 2) {
+// 🎯 Extrator Especializado (PRÉ-SOLO)
+const extractItemsPreSolo = (lines: any[][], columns: any) => {
+  const items: any[] = [];
+  
+  lines.forEach((line: any[]) => {
+    let numero = ''; let nome = ''; let grau = ''; let fase = 'PR'; // Pré-solo é default PR
+
+    line.forEach((token: any) => {
+      const cleanText = token.text.trim();
+      const type = classifyToken(cleanText);
+
+      if (type === 'numero' && !numero) {
+        numero = cleanText.replace(/[-–—.:]/g, '');
+      } else if (type === 'grau') {
+        grau = cleanText;
+      } else if (type === 'fase_grau') {
+         const pgMatch = cleanText.match(/^(PR|RC|RM|RO|--)[/\-]?(1|2|3|4|5|6|N\/A|N\/O|NR|--)$/i);
+         if (pgMatch && pgMatch[2]) grau = pgMatch[2].toUpperCase();
+      } else if (type === 'fase') {
+         // Ignora, já setamos PR default para facilitar no Pré-Solo
+      } else {
+         nome += (nome ? ' ' : '') + cleanText;
+      }
+    });
+
+    // Fallback Geométrico se não achou nota na varredura padrão
+    if (!grau && line.length > 0) {
+      grau = findNearestGrau(line[0], line, columns);
+    }
+
+    nome = nome.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+    if (numero && nome.length > 2) {
       items.push({ id: crypto.randomUUID(), numero, nome, fase, grau, comentario: '' });
     }
   });
 
   return items;
+};
+
+// 🎯 Ultimate Fallback (Cascata Final)
+const ultimateFallback = (items: any[], rawText: string) => {
+  const regex = /(\d{1,2})\s*[-–—.]?\s*(.*?)\s+(PR|RC|RM|RO)?\s*[\/\-]?\s*([1-6])\b/gi;
+  let match;
+  while ((match = regex.exec(rawText)) !== null) {
+    const numero = match[1];
+    let item = items.find(i => i.numero === numero);
+    if (item && !item.grau && match[4]) {
+      item.grau = match[4];
+    }
+  }
+  return items;
+};
+
+// 🎯 Calculadora de Confiança (Score)
+const computeConfidence = (item: any) => {
+  let score = 0;
+  if (item.numero) score += 0.3;
+  if (item.nome.length > 5) score += 0.3;
+  if (item.grau) score += 0.2;
+  if (item.fase && item.fase !== '--') score += 0.1;
+  if (item.comentario) score += 0.1;
+  return score;
+};
+
+// 🎯 Validador (Logs de erro no console)
+const validateItems = (items: any[]) => {
+  const errors: any[] = [];
+  items.forEach(item => {
+    if (!item.numero && !/Afetivo|Cognitivo/i.test(item.nome)) errors.push({ type: 'SEM_NUMERO', item });
+    if (!item.grau) errors.push({ type: 'SEM_GRAU', item });
+  });
+  return errors;
 };
 
 // ---------------------------------------------------------------------------------
@@ -140,6 +303,10 @@ export default function App() {
   const [showModal, setShowModal] = useState(false);
   const [modalState, setModalState] = useState('sending');
   const [modalMessage, setModalMessage] = useState('');
+  
+  // MODO DEUS 
+  const [debugMode, setDebugMode] = useState(false);
+  const [rawPdfTokens, setRawPdfTokens] = useState<any[]>([]);
 
   const WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxLlUKIeUnaLW2VeWOpIG5ZtrrAFy_Qg9YQTq5fG4HrMUg7kt196zcFAt4jOjBrMsEE/exec";
 
@@ -161,8 +328,10 @@ export default function App() {
 
   const processStructuredData = (rawItems: any[], fullText: string) => {
     
-    // EXTRAÇÃO DE METADADOS
+    // 1. DETECÇÃO DE LAYOUT E METADADOS
+    const layout = detectLayoutType(fullText);
     const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     let tipoMissaoDetectado = 'Normal';
     if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
@@ -186,18 +355,18 @@ export default function App() {
       parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
 
-    // ISOLAR A TABELA DE MANOBRAS COM BARREIRA DE SEGURANÇA
+    // 2. ISOLAR TABELA E DETECTAR COLUNAS (AUTO-AJUSTE)
     const normalized = rawItems.map((i: any) => ({ text: i.text.trim(), x: i.x, y: i.y })).filter((i: any) => i.text.length > 0);
     const allLines = buildLines(normalized);
 
     let tableLines: any[][] = [];
     let isTable = false;
+    let tableFinished = false;
 
     allLines.forEach((line: any[]) => {
       const text = line.map((t: any) => t.text).join(' ');
-      if (/\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) isTable = true;
-      // Desliga a tabela imediatamente ao bater nos comentários (Barreira de Lixo)
-      if (/(Itens Afetivos|Cognitivos|Comentários:|Recomendações\/Parecer:|Ass\. Digital)/i.test(text)) isTable = false;
+      if (/(Itens Afetivos|Cognitivos|Comentários:|Recomendações\/Parecer:|Ass\. Digital)/i.test(text)) { isTable = false; tableFinished = true; }
+      if (!tableFinished && /\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) isTable = true;
       if (isTable) tableLines.push(line);
     });
 
@@ -213,13 +382,22 @@ export default function App() {
     const leftMerged = mergeBrokenLines(leftLines);
     const rightMerged = mergeBrokenLines(rightLines);
 
-    // 🟢 EXTRAI A TABELA COMPLETA (ITENS COM E SEM COMENTÁRIO)
-    const tableItems = [
-      ...extractItemsFromLines(leftMerged),
-      ...extractItemsFromLines(rightMerged)
-    ];
+    let leftCols = detectColumns(leftMerged);
+    let rightCols = detectColumns(rightMerged);
+    
+    // Aplica o auto-ajuste de colunas
+    leftCols = refineColumns(normalized.filter((t:any) => t.x < 300), leftCols);
+    rightCols = refineColumns(normalized.filter((t:any) => t.x >= 300), rightCols);
 
-    // EXTRAÇÃO DE ITENS AFETIVOS/COGNITIVOS
+    // 3. EXTRAI ITENS DEPENDENDO DO TIPO DE FICHA (PRE x VI)
+    let tableItems: any[] = [];
+    if (layout === 'PRE') {
+      tableItems = [...extractItemsPreSolo(leftMerged, leftCols), ...extractItemsPreSolo(rightMerged, rightCols)];
+    } else {
+      tableItems = [...extractItemsFromLines(leftMerged, leftCols), ...extractItemsFromLines(rightMerged, rightCols)];
+    }
+
+    // 4. EXTRAÇÃO DE AFETIVOS
     const afetivos: any[] = [];
     const idxAfetivos = fullText.search(/Itens Afetivos/i);
     const idxComentarios = fullText.search(/Comentários:/i);
@@ -230,23 +408,18 @@ export default function App() {
       while ((matchA = afetivoRegex.exec(section)) !== null) {
         let rawNome = matchA[1].trim().replace(/^Itens Afetivos.*?Cognitivos:/i, '').replace(/^[-–—.:\s]+/, '');
         let grauA = matchA[2].toUpperCase().replace(/\s+/g, '');
-        
         let numeroA = '';
-        const numMatch = rawNome.match(/^(0?[1-9]|[1-5][0-9])\s*[-–—.:]?\s*(.*)$/);
-        if (numMatch) {
-            numeroA = numMatch[1];
-            rawNome = numMatch[2].trim();
-        }
-
+        const numMatch = rawNome.match(/^(\d{1,2})\s*[-–—.:]?\s*(.*)$/);
+        if (numMatch) { numeroA = numMatch[1]; rawNome = numMatch[2].trim(); }
         if (rawNome.length > 3 && !/esquadrão/i.test(rawNome)) {
             afetivos.push({ id: crypto.randomUUID(), numero: numeroA, nome: rawNome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
         }
       }
     }
 
-    // EXTRAÇÃO DOS TEXTOS DE COMENTÁRIOS
+    // 5. EXTRAÇÃO DE COMENTÁRIOS E MERGE
     const comments: any[] = [];
-    const commentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
+    const commentRegex = /(?:^|\s)(\d{1,2})\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
     const matches: any[] = [];
     let commentMatch;
     
@@ -272,10 +445,11 @@ export default function App() {
 
       if (['--', 'N/O', 'N/A', 'NR', 'AN/'].includes(grau.replace(/\s+/g, ''))) grau = '';
       
-      comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: fullText.substring(start, end).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() });
+      let rawComentario = fullText.substring(start, end).replace(/MATERIAL DE ACESSO RESTRITO/gi, '').replace(/Art\. 44.*?2012/gi, '').replace(/--- PAGE \d+ ---/gi, '').replace(/\b\d+\s+de\s+\d+\b/gi, '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      comments.push({ numero: current.numero, nome: current.nome, fase, grau, comentario: rawComentario });
     }
 
-    // MERGE FINAL E PREENCHIMENTO
+    // 6. MERGE CASCATA (Similaridade + Ultimate Fallback)
     const similarity = (a: string, b: string) => {
       a = a.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
       b = b.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -285,7 +459,7 @@ export default function App() {
       wordsA.forEach(w => { if (wordsB.includes(w)) score++; }); return score / Math.max(wordsA.length, wordsB.length);
     };
 
-    const finalItems = [...tableItems, ...afetivos]; 
+    let finalItems = [...tableItems, ...afetivos]; 
     comments.forEach((c: any) => {
       let target = finalItems.find((it: any) => it.numero === c.numero);
       if (!target) {
@@ -302,11 +476,18 @@ export default function App() {
       }
     });
 
-    const cleanResults = finalItems
+    finalItems = ultimateFallback(finalItems, fullText);
+
+    // 7. APLICAÇÃO DE SCORE DE CONFIANÇA E VALIDAÇÃO
+    finalItems = finalItems
       .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
+      .map(i => ({ ...i, confidence: computeConfidence(i) }))
       .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
-    if (cleanResults.length > 0) { setItems(cleanResults); setStatus('reviewing'); setErrorMsg(''); } 
+    const errors = validateItems(finalItems);
+    if (errors.length > 0) console.warn("Erros detectados no parsing:", errors);
+
+    if (finalItems.length > 0) { setItems(finalItems); setStatus('reviewing'); setErrorMsg(''); } 
     else { setErrorMsg('Não foi possível extrair dados estruturados.'); setStatus('idle'); }
   };
 
@@ -325,14 +506,9 @@ export default function App() {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        
         const pageOffsetY = (pdf.numPages - i) * 3000; 
 
-        rawItems.push(...textContent.items.map((it: any) => ({ 
-          text: it.str.trim(), 
-          x: it.transform[4], 
-          y: it.transform[5] + pageOffsetY 
-        })));
+        rawItems.push(...textContent.items.map((it: any) => ({ text: it.str.trim(), x: it.transform[4], y: it.transform[5] + pageOffsetY })));
         
         let sortedForText = [...textContent.items].sort((a: any, b: any) => {
           if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
@@ -347,13 +523,14 @@ export default function App() {
         }
         fullText += '\n\n';
       }
+      setRawPdfTokens(rawItems);
       processStructuredData(rawItems, fullText);
     } catch (err) { setErrorMsg('Erro fatal ao processar o PDF.'); setStatus('idle'); }
   };
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
   const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item Manual', fase: '--', grau: '', comentario: '' }]);
+  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Novo Item', fase: '--', grau: '', comentario: '', confidence: 1.0 }]);
 
   const buildPayload = () => items.map((item: any) => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
 
@@ -379,6 +556,8 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
+      {debugMode && <DebugOverlay tokens={rawPdfTokens} />}
+      
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
@@ -388,23 +567,32 @@ export default function App() {
           </div>
         </div>
       )}
+      
       <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
-        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center gap-5">
-          <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-          <div><h1 className="text-3xl font-bold tracking-tight">Extrator de Fichas (EIA)</h1><p className="text-slate-500 text-lg">Processamento ultrarrápido offline.</p></div>
+        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
+          <div className="flex items-center gap-5">
+            <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
+            <div><h1 className="text-3xl font-bold tracking-tight">Extrator de Fichas (EIA)</h1><p className="text-slate-500 text-lg">OCR Espacial Ativado (Modo Deus).</p></div>
+          </div>
+          {status === 'reviewing' && (
+            <button onClick={() => setDebugMode(!debugMode)} className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`} title="Ativar Debug Visual">
+              <Bug size={24} />
+            </button>
+          )}
         </header>
+
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">Processamento local instantâneo. Arquitetura Espacial Definitiva.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Selecione o PDF da Ficha</h2><p className="text-slate-500 mb-8 max-w-md">O sistema agora conta com Bounding Boxes e Score de Confiança.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Importar Arquivo <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Processando...</h2><p className="text-slate-500 mt-2">Extraindo dados velozmente...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Processando...</h2><p className="text-slate-500 mt-2">Mapeando geometria e aplicando fallback...</p></div>
         )}
         
         {status === 'reviewing' && (
-          <div className="space-y-6">
+          <div className="space-y-6 relative z-10">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
               <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho e Metadados</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
@@ -428,17 +616,20 @@ export default function App() {
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
                 <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> {items.length} Itens Identificados</h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Cancelar</button>
+                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setDebugMode(false); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Cancelar</button>
                   <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
                   <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Enviar Banco de Dados</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-[950px]">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Nº</th><th className="p-3">Nome da Manobra / Item</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Comentário Estruturado</th><th className="p-3 w-12 text-center"></th></tr></thead>
+                <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Score de Confiança da IA">🛡️</th><th className="p-3 w-16">Nº</th><th className="p-3">Nome da Manobra / Item</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Comentário Estruturado</th><th className="p-3 w-12 text-center"></th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
+                        <td className="p-3 text-center">
+                          <div className={`w-3 h-3 rounded-full mx-auto ${it.confidence > 0.6 ? 'bg-green-400' : (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')}`} title={`Confiança: ${Math.round(it.confidence * 100)}%`}></div>
+                        </td>
                         <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
                         <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
@@ -449,7 +640,7 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Adicionar Manualmente</button></div>
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Adicionar Manualmente</button></div>
               </div>
             </div>
           </div>
