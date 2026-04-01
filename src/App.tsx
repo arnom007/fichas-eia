@@ -58,11 +58,6 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
   </div>
 );
 
-// Função auxiliar para normalizar strings e facilitar o Match (Ideia brilhante)
-const normalizeString = (str: string) => {
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
-};
-
 export default function App() {
   const [status, setStatus] = useState('idle'); 
   const [items, setItems] = useState<any[]>([]);
@@ -109,151 +104,245 @@ export default function App() {
   };
 
   const processTextData = (text: string) => {
-    // 1. EXTRAÇÃO DO CABEÇALHO
-    const headerEndIdx = text.search(/\b1\s*-|Itens Afetivos|Comentários:/i);
-    const headerText = headerEndIdx !== -1 ? text.substring(0, headerEndIdx) : text;
-    const cleanHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').replace(/\|\|\|/g, '');
+    // 1. LIMPEZA GLOBAL
+    let globalCleanText = text
+      .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
+      .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
+      .replace(/--- PAGE \d+ ---/gi, '')
+      .replace(/\b\d+\s+de\s+\d+\b/gi, '')
+      .replace(/COMANDO DA AERONÁUTICA/gi, '')
+      .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
+      .replace(/T-27 BÁSICO 20\d{2}/gi, '')
+      .replace(/PROT[\s.:]*\d+/gi, ''); 
 
-    const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
+    // 2. EXTRAÇÃO DE METADADOS
+    const headerEndIdx = globalCleanText.search(/\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)|Itens Afetivos|Comentários:/i);
+    const headerText = headerEndIdx !== -1 ? globalCleanText.substring(0, headerEndIdx) : globalCleanText;
+    const singleLineHeader = headerText.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+
+    const matchGrauMissao = singleLineHeader.match(/GRAU\s*(\d{1,2})/i);
     const grauMissao = matchGrauMissao ? matchGrauMissao[1] : '';
 
     let tipoMissaoDetectado = 'Normal';
-    if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
-    else if (cleanHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
-    else if (cleanHeader.match(/\bAbortiva\b/i) || cleanHeader.match(/\bVMET\b/i) || cleanHeader.match(/\bVMAT\b/i)) tipoMissaoDetectado = 'Abortiva';
+    if (singleLineHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
+    else if (singleLineHeader.match(/\bRevis[ãa]o\b/i)) tipoMissaoDetectado = 'Revisão';
+    else if (singleLineHeader.match(/\bAbortiva\b/i) || singleLineHeader.match(/\bVMET\b/i) || singleLineHeader.match(/\bVMAT\b/i)) {
+      tipoMissaoDetectado = 'Abortiva';
+    }
 
-    const matchMissao = cleanHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
+    const matchMissao = singleLineHeader.match(/\b((?:VMAT\s+|VMET\s+)?[A-Z]{2,4}-[A-Z0-9]{1,3})\b/i);
     const missao = matchMissao ? matchMissao[1].toUpperCase() : '';
 
-    const matchData = cleanHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const matchData = singleLineHeader.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
     const data = matchData ? matchData[1] : '';
 
-    const times = Array.from(cleanHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
+    const times = Array.from(singleLineHeader.matchAll(/\b(\d{2}:\d{2})\b/g));
     let hdep = '', tev = '';
-    if (times.length >= 2) { hdep = times[0][1]; tev = times[times.length - 1][1]; } 
-    else if (times.length === 1) { if (/TEV[^\d]*\d{2}:\d{2}/i.test(cleanHeader)) tev = times[0][1]; else hdep = times[0][1]; }
+    if (times.length >= 2) {
+      hdep = times[0][1];
+      tev = times[times.length - 1][1]; 
+    } else if (times.length === 1) {
+      if (/TEV[^\d]*\d{2}:\d{2}/i.test(singleLineHeader)) tev = times[0][1];
+      else hdep = times[0][1];
+    }
 
     let fase = '';
-    const matchFase = cleanHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
-    if (matchFase) fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
+    const matchFase = singleLineHeader.match(/FASE:\s*(.*?)(?=\s*ALUNO:|\s*INSTRUTOR:|\s*AERONAVE:|\s*NORMAL\b|\s*GRAU\b|$)/i);
+    if (matchFase) {
+      fase = matchFase[1].replace(/["\n\r]/g, '').replace(/^[-:]+|[-:]+$/g, '').trim().toUpperCase();
+    }
 
-    const matchAeronave = cleanHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || cleanHeader.match(/\b(13\d{2}|14\d{2})\b/);
+    const matchAeronave = singleLineHeader.match(/(?:AERONAVE)[\s:]*(\d{4})\b/i) || singleLineHeader.match(/\b(13\d{2}|14\d{2})\b/);
     const aeronave = matchAeronave ? matchAeronave[1] : '';
 
-    const matchPousos = cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
+    const matchPousos = singleLineHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i);
     const pousos = matchPousos ? matchPousos[1] : '';
 
-    const parecerMatch = text.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i);
-    const parecerStr = parecerMatch ? parecerMatch[1].replace(/\|\|\|/g, '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
+    const parecerMatch = globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR do voo subsequente|Autoridade Competente|Ass\. Digital|$)/i);
+    let parecerStr = parecerMatch ? parecerMatch[1].replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim() : '';
 
     setMeta(prev => ({
-      esquadrilha: prev.esquadrilha, aluno1p: prev.aluno1p, instrutor: prev.instrutor,
-      fase, aeronave, data, missao, grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
-      tipoMissao: tipoMissaoDetectado, pousos, hdep, tev, parecer: parecerStr
+      esquadrilha: prev.esquadrilha, 
+      aluno1p: prev.aluno1p,         
+      instrutor: prev.instrutor,     
+      fase, aeronave, data, missao,
+      grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : grauMissao,
+      tipoMissao: tipoMissaoDetectado,
+      pousos, hdep, tev,
+      parecer: parecerStr
     }));
 
-    // 2. PARSING ESTRUTURADO LINHA A LINHA (COM O SEPARADOR |||)
-    const finalItems: any[] = [];
-    const lines = text.split('\n');
+    // 3. EXTRAÇÃO DAS TABELAS
+    const extractedItemsMap = new Map();
 
-    let isAffectiveArea = false;
-    let isCommentsArea = false;
-    let accumulatedComments = '';
+    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
+    const idxComentarios = globalCleanText.search(/Comentários:/i);
 
-    for (let i = 0; i < lines.length; i++) {
-      let line = lines[i].trim();
-      if (!line) continue;
+    let tableStartIndex = 0;
+    const firstItemRegex = /(?:^|\n|\r|\s)\b1\s*[-–—]?\s*(?:Partida|Voo sob Capota)/i;
+    const firstItemMatch = globalCleanText.substring(0, idxAfetivos !== -1 ? idxAfetivos : globalCleanText.length).match(firstItemRegex);
+    if (firstItemMatch) {
+      tableStartIndex = firstItemMatch.index! + firstItemMatch[0].indexOf('1');
+    }
 
-      // Remoção de lixo de rodapé no meio da linha
-      line = line.replace(/MATERIAL DE ACESSO RESTRITO/gi, '').replace(/Art\. 44.*?2012/gi, '').replace(/--- PAGE \d+ ---/gi, '');
+    let tableEndIndex = globalCleanText.length;
+    if (idxAfetivos !== -1) tableEndIndex = idxAfetivos;
+    else if (idxComentarios !== -1) tableEndIndex = idxComentarios;
 
-      if (line.match(/Itens Afetivos/i)) { isAffectiveArea = true; continue; }
-      if (line.match(/Comentários:/i)) { isCommentsArea = true; isAffectiveArea = false; continue; }
+    let cleanTableText = globalCleanText.substring(tableStartIndex, tableEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-      if (isCommentsArea) {
-        accumulatedComments += line.replace(/\|\|\|/g, ' ') + ' \n ';
-        continue;
+    // Passo A: Isolar os números das manobras substituindo-os por um Token protegido
+    let maskedTableText = cleanTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*/g, ' __ITEM_$1__ ');
+    maskedTableText = maskedTableText.replace(/(?:^|\s)(0?[1-9]|[1-5][0-9])(?=[A-Za-zÀ-ÿ])/g, ' __ITEM_$1__ ');
+
+    // Passo B: Fatiar a string sempre que encontrar uma Fase/Grau
+    const pgRegex = /(?:\s+|^)[\(\[]?(PR|(?:RC|RM|RO|--)(?:[\s/\-]*)(?:[1-6]|N\/O|N\/A|NR|A\s*N\/|--)?|[1-6]|N\/O|N\/A|NR|A\s*N\/)[\)\]]?(?=\s|$)/i;
+    const parts = maskedTableText.split(pgRegex);
+
+    for (let i = 0; i < parts.length - 1; i += 2) {
+      let rawText = parts[i].trim();
+      let rawPG = parts[i + 1].trim();
+      
+      if (!rawText && !rawPG) continue;
+
+      const numMatches = Array.from(rawText.matchAll(/__ITEM_(\d{1,2})__/g));
+      
+      let faseItem = '--';
+      let grauItem = '';
+      
+      let cleanPG = rawPG.toUpperCase();
+      if (cleanPG === 'PR') {
+         faseItem = 'PR';
+      } else if (/^(RC|RM|RO|--)$/.test(cleanPG)) {
+         faseItem = cleanPG;
+      } else if (/^([1-6]|N\/O|N\/A|NR|A\s*N\/|--)$/.test(cleanPG)) {
+         grauItem = cleanPG.replace(/\s+/g, '');
+      } else {
+         const matchPhase = cleanPG.match(/^(RC|RM|RO|--)(?:[\s/\-]*)(.*)$/);
+         if (matchPhase) {
+             faseItem = matchPhase[1];
+             grauItem = matchPhase[2].replace(/\s+/g, '');
+         }
       }
 
-      // LÓGICA DE ITENS AFETIVOS
-      if (isAffectiveArea) {
-        const parts = line.split('|||').map((p: string) => p.trim()).filter((p: string) => p);
-        if (parts.length >= 2) {
-          const name = parts[0].trim();
-          const grade = parts[parts.length - 1].replace(/\s+/g, '').toUpperCase();
-          
-          if (/^(NORMAL|DESTACOU-SE|PRECISAMELHORAR|DEFICIENTE|ABAIXODOPADRÃO|PERIGOSO|N\/O|N\/A|NR|--)$/.test(grade)) {
-             finalItems.push({ 
-               id: crypto.randomUUID(), 
-               numero: '', 
-               nome: name, 
-               fase: '--', 
-               grau: ['--', 'N/O', 'N/A', 'NR'].includes(grade) ? '' : grade, 
-               comentario: '' 
-             });
-          }
-        }
-      } 
-      // LÓGICA DE MANOBRAS E ITENS DA TABELA PRINCIPAL
-      else {
-        const parts = line.split('|||').map((p: string) => p.trim()).filter((p: string) => p);
+      const grauNorm = grauItem.replace(/\s+/g, '');
+      if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauNorm)) {
+        grauItem = '';
+      }
+
+      // Passo C: Associar os números encontrados à nota extraída
+      if (numMatches.length > 0) {
+        const pieces = rawText.split(/__ITEM_\d{1,2}__/);
         
-        // Garante que tentamos processar mesmo se só tiver a manobra (parts.length >= 1)
-        if (parts.length >= 1) {
-          const maneuverPart = parts[0].trim();
-          const gradePart = parts.length >= 2 ? parts[parts.length - 1].trim().toUpperCase() : '';
+        for (let j = 0; j < numMatches.length; j++) {
+            const num = numMatches[j][1];
+            let name = pieces[j+1] ? pieces[j+1].trim() : '';
+            if (!name && j === 0) name = pieces[0].trim();
+            
+            name = name.replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
 
-          const numMatch = maneuverPart.match(/^(0?[1-9]|[1-5][0-9])\s*[-–—]?\s*(.*)$/);
-          if (numMatch) {
-            const num = numMatch[1];
-            const name = numMatch[2].replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
-
-            let faseItem = '--';
-            let grauItem = '';
-
-            if (gradePart) {
-              const pgParts = gradePart.split(/\s+/);
-              if (pgParts.length >= 2) {
-                  faseItem = pgParts[0].toUpperCase();
-                  grauItem = pgParts[1].toUpperCase();
-              } else if (pgParts.length === 1) {
-                  const singlePart = pgParts[0].toUpperCase();
-                  if (singlePart === 'PR') {
-                      faseItem = 'PR';
-                  } else if (/^(RC|RM|RO|--)$/.test(singlePart)) {
-                      faseItem = singlePart;
-                  } else {
-                      grauItem = singlePart;
-                  }
-              }
+            let finalFase = '--';
+            let finalGrau = '';
+            if (j === numMatches.length - 1) {
+                finalFase = faseItem;
+                finalGrau = grauItem;
             }
 
-            if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO'].includes(grauItem.replace(/\s+/g, ''))) grauItem = '';
+            extractedItemsMap.set(num, {
+              id: crypto.randomUUID(),
+              numero: num,
+              nome: name,
+              fase: finalFase,
+              grau: finalGrau,
+              comentario: ''
+            });
+        }
+      }
+    }
 
-            // Impede a criação de duplicatas da mesma manobra
-            if (!finalItems.find(i => i.numero === num)) {
-              finalItems.push({ id: crypto.randomUUID(), numero: num, nome: name, fase: faseItem, grau: grauItem, comentario: '' });
-            }
+    // 4. ITENS AFETIVOS
+    let affectiveAreaText = '';
+    if (idxAfetivos !== -1) {
+      const affEndIndex = idxComentarios !== -1 ? idxComentarios : globalCleanText.length;
+      affectiveAreaText = globalCleanText.substring(idxAfetivos, affEndIndex).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+      
+      const affectiveRegex = /(?:^|\s)([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]{4,80}?)\s+(NORMAL|DESTACOU-SE|NÃO OBSERVADO|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)(?=\s|$|\b\d{1,2}|\b(?:Comentários|Debriefing|Preparo|Raciocínio|Adaptação|Progresso|Reação|Interesse|Iniciativa|Aplicação|Conhecimento|Briefing|Mentalidade))/gi;
+      let matchT2;
+      
+      while ((matchT2 = affectiveRegex.exec(affectiveAreaText)) !== null) {
+        let itemName = matchT2[1].trim();
+        let itemGrau = matchT2[2].toUpperCase();
+
+        const itemGrauNorm = itemGrau.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(itemGrauNorm)) {
+          itemGrau = '';
+        }
+
+        if (itemName.length > 3 && !/^\d/.test(itemName) && !itemName.toLowerCase().includes('itens afetivos') && !itemName.toLowerCase().includes('cognitivos')) {
+          const grauTextToRemove = matchT2[2].toUpperCase();
+          itemName = itemName.replace(new RegExp(`\\b${grauTextToRemove}\\b`, 'i'), '').trim();
+
+          if(itemName){
+            extractedItemsMap.set(itemName, {
+              id: crypto.randomUUID(),
+              numero: '', 
+              nome: itemName,
+              fase: '--',
+              grau: itemGrau, 
+              comentario: ''
+            });
           }
         }
       }
     }
 
-    // 3. PARSING DE COMENTÁRIOS COM A SUA BLINDAGEM MESTRA
-    if (accumulatedComments) {
-      const cleanComments = accumulatedComments.replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    let finalItems = Array.from(extractedItemsMap.values());
+
+    // 5. COMENTÁRIOS E CROSS-REFERENCE
+    if (idxComentarios !== -1) {
+      let cleanComments = globalCleanText.substring(idxComentarios + 12).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
 
       const allCommentMatches: any[] = [];
       const unifiedCommentRegex = /(?:^|\s)(0?[1-9]|[1-5][0-9])\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
       let matchC;
       
       while ((matchC = unifiedCommentRegex.exec(cleanComments)) !== null) {
+        const num = matchC[1].trim();
+        const nomeC = matchC[2].trim(); 
+        let rawFaseC = '--';
+        let rawGrauC = '';
+        
+        if (matchC[3]) {
+            const insideParens = matchC[3].toUpperCase();
+            if (insideParens.includes('/')) {
+               const parts = insideParens.split('/');
+               rawFaseC = parts[0].trim() || '--';
+               rawGrauC = parts[1].trim();
+            } else {
+               const val = insideParens.trim();
+               if (val === 'PR') {
+                  rawFaseC = 'PR';
+               } else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'NÃO OBSERVADO', 'PRECISA MELHORAR', 'DEFICIENTE', 'ABAIXO DO PADRÃO', 'PERIGOSO', 'N/O', 'N/A', 'NR'].includes(val)) {
+                  rawGrauC = val;
+               } else {
+                  rawFaseC = val;
+               }
+            }
+        }
+
+        if (rawFaseC === 'PR') rawGrauC = '';
+        const rawGrauCNorm = rawGrauC.replace(/\s+/g, '');
+        if (['--', 'N/O', 'N/A', 'NR', 'AN/', 'NÃOOBSERVADO', ''].includes(rawGrauCNorm)) {
+          rawGrauC = '';
+        }
+
         allCommentMatches.push({
           index: matchC.index,
           length: matchC[0].length,
-          numero: matchC[1].trim(),
-          nome: matchC[2].trim(),
-          rawOptions: matchC[3] ? matchC[3] : ''
+          numero: num,
+          nome: nomeC, 
+          fase: rawFaseC,
+          grau: rawGrauC
         });
       }
 
@@ -278,48 +367,31 @@ export default function App() {
 
         let comentarioText = cleanComments.substring(startIndex, endIndex).trim();
 
-        // Interpretador de notas dentro dos parênteses do comentário (Ex: RC/4, PR, 5)
-        let grauC = '';
-        let faseC = '--';
-        if (currentMatch.rawOptions) {
-          const inside = currentMatch.rawOptions.toUpperCase();
-          if (inside.includes('/')) {
-            const parts = inside.split('/');
-            faseC = parts[0].trim() || '--';
-            grauC = parts[1].trim();
-          } else {
-            const val = inside.trim();
-            if (val === 'PR') faseC = 'PR';
-            else if (/^[1-6]$/.test(val) || ['NORMAL', 'DESTACOU-SE', 'PRECISA MELHORAR', 'DEFICIENTE'].includes(val)) grauC = val;
-            else faseC = val;
-          }
-        }
-        if (faseC === 'PR') grauC = '';
-        if (['--', 'N/O', 'N/A', 'NR', 'NÃOOBSERVADO'].includes(grauC.replace(/\s+/g, ''))) grauC = '';
-
-        // Busca o item na tabela
         let foundItem = finalItems.find((item: any) => item.numero === currentMatch.numero);
+        
         if (!foundItem) {
           foundItem = finalItems.find((item: any) => {
-            const n1 = normalizeString(item.nome);
-            const n2 = normalizeString(currentMatch.nome);
+            const n1 = item.nome.toLowerCase().trim();
+            const n2 = currentMatch.nome.toLowerCase().trim();
             return (n1.length > 3 && n2.length > 3) && (n1.includes(n2) || n2.includes(n1));
           });
         }
 
         if (foundItem) {
           foundItem.comentario = comentarioText;
-          // SAFETY NET: Se o item na tabela estava sem nota, puxa a nota do comentário!
-          if (!foundItem.grau && grauC && grauC !== 'PR') foundItem.grau = grauC;
-          if (foundItem.fase === '--' && faseC !== '--') foundItem.fase = faseC;
-          if (faseC === 'PR') foundItem.fase = 'PR';
+          if (!foundItem.numero) foundItem.numero = currentMatch.numero; 
+
+          // Safety Net: Puxa o grau do comentário se a tabela tiver falhado
+          if (!foundItem.grau && currentMatch.grau) foundItem.grau = currentMatch.grau;
+          if (foundItem.fase === '--' && currentMatch.fase !== '--') foundItem.fase = currentMatch.fase;
+          if (currentMatch.fase === 'PR') foundItem.fase = 'PR';
         } else {
           finalItems.push({
             id: crypto.randomUUID(),
             numero: currentMatch.numero,
             nome: currentMatch.nome,
-            fase: faseC,
-            grau: grauC,
+            fase: currentMatch.fase,
+            grau: currentMatch.grau,
             comentario: comentarioText
           });
         }
@@ -395,7 +467,6 @@ export default function App() {
           }
           if (currentLine.length > 0) lines.push(currentLine);
 
-          // O MOTOR DE SEPARAÇÃO ESPACIAL DE COLUNAS (A sua obra-prima)
           for (const line of lines) {
             line.sort((a, b) => a.transform[4] - b.transform[4]);
             let lineStr = '';
@@ -414,20 +485,7 @@ export default function App() {
                 }
               }
             }
-            // 1. Limpeza Global DIRETO NA FONTE
-            let tempLine = lineStr.trim()
-                .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-                .replace(/Art\. 44 e Art\. 45 do Decreto.*?2012/gi, '')
-                .replace(/--- PAGE \d+ ---/gi, '')
-                .replace(/\b\d+\s+de\s+\d+\b/gi, '')
-                .replace(/COMANDO DA AERONÁUTICA/gi, '')
-                .replace(/1 ESQUADRÃO DE INSTRUÇÃO AÉREA/gi, '')
-                .replace(/T-27 BÁSICO 20\d{2}/gi, '')
-                .replace(/PROT[\s.:]*\d+/gi, '');
-
-            if (tempLine.trim() !== '') {
-                fullText += tempLine.trim() + '\n';
-            }
+            fullText += lineStr.trim() + '\n';
           }
           fullText += '\n\n';
         }
@@ -454,7 +512,7 @@ export default function App() {
       aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave,
       hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer,
       numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau,
-      comentario: item.comentario, tipoMissao: meta.tipoMissao
+      comentario: item.comentario, tipoMissao: meta.tipoMissao 
     }));
   };
 
@@ -494,55 +552,144 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
+      
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
-            {modalState === 'sending' && (<><RefreshCw size={40} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-2">Enviando...</h2><p className="text-slate-500 mb-4">Salvando dados no banco.</p></>)}
-            {modalState === 'success' && (<><CheckCircle2 size={48} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-2">Concluído!</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={closeModalAndReset} className="w-full bg-slate-800 text-white font-bold py-3 px-6 rounded-xl">Próxima Ficha</button></>)}
-            {modalState === 'error' && (<><XCircle size={48} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-2">Erro</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-200 text-slate-800 font-bold py-3 px-6 rounded-xl">Fechar</button></>)}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm px-4 transition-all">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center transform scale-100 animate-in fade-in zoom-in duration-200">
+            
+            {modalState === 'sending' && (
+              <>
+                <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6">
+                  <RefreshCw size={40} className="animate-spin" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Enviando Dados...</h2>
+                <p className="text-slate-500 mb-4">Salvando todos os itens da ficha de voo no banco de instrução.</p>
+                <div className="bg-amber-50 text-amber-700 border border-amber-200 text-sm font-medium px-4 py-3 rounded-lg flex items-center justify-center gap-2 w-full">
+                  <AlertCircle size={18} />
+                  Por favor, não feche esta página.
+                </div>
+              </>
+            )}
+
+            {modalState === 'success' && (
+              <>
+                <div className="w-20 h-20 bg-green-50 text-green-500 rounded-full flex items-center justify-center mb-6">
+                  <CheckCircle2 size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Concluído!</h2>
+                <p className="text-slate-500 mb-8">{modalMessage}</p>
+                <button 
+                  onClick={closeModalAndReset}
+                  className="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg"
+                >
+                  Inserir Próxima Ficha
+                </button>
+              </>
+            )}
+
+            {modalState === 'error' && (
+              <>
+                <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mb-6">
+                  <XCircle size={48} />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800 mb-2">Erro no Envio</h2>
+                <p className="text-slate-500 mb-8">{modalMessage}</p>
+                <button 
+                  onClick={() => setShowModal(false)}
+                  className="w-full bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 px-6 rounded-xl transition"
+                >
+                  Fechar e Tentar Novamente
+                </button>
+              </>
+            )}
+
           </div>
         </div>
       )}
 
       <div className={`max-w-6xl mx-auto transition-opacity ${showModal ? 'opacity-30 pointer-events-none' : 'opacity-100'}`}>
+        
         <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border border-slate-200">
           <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={28} /></div>
-            <div><h1 className="text-2xl font-bold">Extrator de Fichas de Voo</h1><p className="text-slate-500">Sistema automatizado para instrução aérea.</p></div>
+            <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0">
+              <FileText size={28} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">Extrator de Fichas de Voo</h1>
+              <p className="text-slate-500">Sistema automatizado para instrução aérea.</p>
+            </div>
           </div>
         </header>
 
-        {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700"><AlertCircle className="inline-block mr-2" size={20} />{errorMsg}</div>}
+        {errorMsg && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-700">
+            <AlertCircle className="shrink-0 mt-0.5" size={20} />
+            <p>{errorMsg}</p>
+          </div>
+        )}
 
         {status === 'idle' && (
           <div className="flex justify-center">
             <div className="bg-white p-10 md:p-16 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center text-center w-full max-w-2xl">
-              <Upload size={40} className="text-blue-600 mb-6" />
+              <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-6">
+                <Upload size={40} />
+              </div>
               <h2 className="text-2xl font-semibold mb-3">Inserir Arquivo PDF</h2>
-              <p className="text-slate-500 text-base mb-8 max-w-md">Selecione o arquivo da ficha de voo gerada pelo sistema. A leitura será feita de forma automática e à prova de falhas.</p>
-              <label className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-medium cursor-pointer flex items-center gap-3">
-                <FileText size={24} /> Selecionar PDF
-                <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} />
+              <p className="text-slate-500 text-base mb-8 max-w-md">
+                Selecione o arquivo da ficha de voo gerada pelo sistema. A leitura será feita de forma automática e à prova de falhas.
+              </p>
+              <label className="bg-blue-600 hover:bg-blue-700 transition text-white px-8 py-4 rounded-xl font-medium cursor-pointer shadow-sm text-lg flex items-center gap-3">
+                <FileText size={24} />
+                Selecionar PDF
+                <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => { e.target.value = '' }} onChange={handleFileUpload} />
               </label>
             </div>
           </div>
         )}
 
         {status === 'loading' && (
-          <div className="bg-white p-16 rounded-xl flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-4" size={40} /><h2 className="text-xl font-semibold">Analisando...</h2></div>
+          <div className="bg-white p-16 rounded-xl shadow-sm border border-slate-200 flex flex-col items-center justify-center text-center">
+            <RefreshCw className="text-blue-600 animate-spin mb-4" size={40} />
+            <h2 className="text-xl font-semibold">Analisando a Ficha...</h2>
+            <p className="text-slate-500">Extraindo cabeçalho, tabelas e comentários.</p>
+          </div>
         )}
 
         {status === 'reviewing' && (
           <div className="space-y-6">
-            <div className="bg-white rounded-xl shadow-sm border p-6">
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2 border-b pb-3"><FileText className="text-blue-500" size={20} /> Dados da Missão</h3>
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <FileText className="text-blue-500" size={20} /> Dados da Missão
+                </h3>
+                <span className="text-xs font-semibold bg-blue-50 text-blue-600 px-3 py-1 rounded-full">
+                  Esses dados acompanharão todas as linhas no banco de dados
+                </span>
+              </div>
+              
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-                <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
-                <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} />
-                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} />
+                <MetaSelect 
+                  label="Esquadrilha *" 
+                  value={meta.esquadrilha} 
+                  onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} 
+                  options={['Antares', 'Vega', 'Castor', 'Sirius']} 
+                />
+                <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
+                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="HNI" />
                 <MetaInput label="Missão" value={meta.missao} onChange={(e: any) => updateMeta('missao', e.target.value)} />
-                <MetaInput label="Grau da Missão" value={isGrauDisabled ? '' : meta.grauMissao} onChange={(e: any) => updateMeta('grauMissao', e.target.value)} disabled={isGrauDisabled} />
-                <MetaSelect label="Tipo de Missão" value={meta.tipoMissao} onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} options={['Normal', 'Abortiva', 'Extra', 'Revisão']} />
+                <MetaInput 
+                  label="Grau da Missão" 
+                  value={isGrauDisabled ? '' : meta.grauMissao} 
+                  onChange={(e: any) => updateMeta('grauMissao', e.target.value)} 
+                  disabled={isGrauDisabled}
+                  title={isGrauDisabled ? 'Missões Abortivas ou Extras não possuem grau.' : ''}
+                />
+                <MetaSelect 
+                  label="Tipo de Missão" 
+                  value={meta.tipoMissao} 
+                  onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} 
+                  options={['Normal', 'Abortiva', 'Extra', 'Revisão']} 
+                />
                 <MetaInput label="Data" value={meta.data} onChange={(e: any) => updateMeta('data', e.target.value)} />
                 <MetaInput label="Fase" value={meta.fase} onChange={(e: any) => updateMeta('fase', e.target.value)} />
                 <MetaInput label="Aeronave" value={meta.aeronave} onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
@@ -550,48 +697,135 @@ export default function App() {
                 <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
                 <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-4 pt-4 border-t"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} /></div>
+
+              <div className="mt-4 pt-4 border-t border-slate-100">
+                <MetaTextarea 
+                  label="Parecer do Comandante / Recomendações" 
+                  value={meta.parecer} 
+                  onChange={(e: any) => updateMeta('parecer', e.target.value)} 
+                  placeholder="Se houver recomendações no fim da ficha, aparecerão aqui..." 
+                />
+              </div>
             </div>
 
-            <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-              <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <div><h2 className="text-xl font-semibold flex items-center gap-2"><Check className="text-green-500" size={24} /> {items.length} Itens Encontrados</h2></div>
-                <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); }} className="px-4 py-3 text-sm border hover:bg-slate-50 rounded-xl">Voltar</button>
-                  <button onClick={exportToCSV} className="px-4 py-3 text-sm border hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
-                  <button onClick={sendToGoogleSheets} className="px-8 py-3 text-base text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center gap-2"><Zap size={20} /> Enviar Banco</button>
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50/50">
+                <div>
+                  <h2 className="text-xl font-semibold text-slate-900 flex items-center gap-2">
+                    <Check className="text-green-500" size={24} /> 
+                    {items.length} Itens Encontrados
+                  </h2>
+                  <p className="text-slate-500 text-sm mt-1">Revise as avaliações antes de enviar para a base.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button 
+                    onClick={() => { setStatus('idle'); setErrorMsg(''); setItems([]); }}
+                    className="px-4 py-3 text-sm font-medium text-slate-600 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition"
+                  >
+                    Voltar / Cancelar
+                  </button>
+                  <button 
+                    onClick={exportToCSV}
+                    className="px-4 py-3 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-xl transition flex items-center gap-2"
+                  >
+                    <Download size={18} /> Exportar (CSV)
+                  </button>
+                  <button 
+                    onClick={sendToGoogleSheets}
+                    className="px-8 py-3 text-base font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition shadow-lg flex items-center gap-2"
+                  >
+                    <Zap size={20} /> Enviar para o Banco
+                  </button>
                 </div>
               </div>
 
               <div className="p-6 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[800px]">
-                  <thead><tr className="bg-slate-50 border-b text-sm"><th className="p-3 w-16">Nº</th><th className="p-3 w-48">Nome</th><th className="p-3 w-20">Fase</th><th className="p-3 w-24">Grau</th><th className="p-3">Comentário</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
-                  <tbody className="text-sm">
-                    {items.map((item) => (
-                      <tr key={item.id} className="border-b hover:bg-slate-50/50">
-                        <td className="p-3"><input value={item.numero} onChange={(e) => updateItem(item.id, 'numero', e.target.value)} className="w-full bg-transparent px-1 outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded" /></td>
-                        <td className="p-3"><input value={item.nome} onChange={(e) => updateItem(item.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded ${getGradeColorClass(item.grau)}`} /></td>
-                        <td className="p-3"><input value={item.fase} onChange={(e) => updateItem(item.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded" /></td>
-                        <td className="p-3">
-                          <input 
-                            value={item.grau} 
-                            disabled={item.fase === 'PR'}
-                            title={item.fase === 'PR' ? "Itens PR não recebem nota." : ""}
-                            onChange={(e) => updateItem(item.id, 'grau', e.target.value)} 
-                            className={`w-full bg-transparent px-1 uppercase outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 rounded ${getGradeColorClass(item.grau)} ${item.fase === 'PR' ? 'opacity-50 cursor-not-allowed' : ''}`} 
-                          />
-                        </td>
-                        <td className="p-3"><textarea value={item.comentario} onChange={(e) => updateItem(item.id, 'comentario', e.target.value)} className={`w-full bg-transparent border px-2 py-1 rounded resize-y min-h-[40px] outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`} placeholder="Sem comentários" /></td>
-                        <td className="p-3 text-center"><button onClick={() => removeItem(item.id)} className="p-2 hover:text-red-500 rounded transition"><Trash2 size={16} /></button></td>
-                      </tr>
-                    ))}
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 text-sm">
+                      <th className="p-3 font-medium w-16">Nº</th>
+                      <th className="p-3 font-medium w-48">Nome da Manobra/Item</th>
+                      <th className="p-3 font-medium w-20">Fase</th>
+                      <th className="p-3 font-medium w-24">Grau</th>
+                      <th className="p-3 font-medium">Comentário</th>
+                      <th className="p-3 font-medium w-12 text-center">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="align-top text-sm">
+                    {items.map((item) => {
+                      const gradeColorClass = getGradeColorClass(item.grau);
+                      return (
+                        <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition">
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.numero} 
+                              onChange={(e) => updateItem(item.id, 'numero', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.nome} 
+                              onChange={(e) => updateItem(item.id, 'nome', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 ${gradeColorClass}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.fase} 
+                              onChange={(e) => updateItem(item.id, 'fase', e.target.value)}
+                              className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 text-center text-slate-600"
+                            />
+                          </td>
+                          <td className="p-3">
+                            <input 
+                              type="text" 
+                              value={item.grau} 
+                              disabled={item.fase === 'PR'}
+                              title={item.fase === 'PR' ? "Itens PR não recebem nota." : ""}
+                              onChange={(e) => updateItem(item.id, 'grau', e.target.value)}
+                              className={`w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white outline-none px-1 py-1 uppercase ${gradeColorClass} ${item.fase === 'PR' ? 'cursor-not-allowed opacity-50 bg-slate-100/50' : ''}`}
+                            />
+                          </td>
+                          <td className="p-3">
+                            <textarea 
+                              value={item.comentario} 
+                              onChange={(e) => updateItem(item.id, 'comentario', e.target.value)}
+                              placeholder="Sem comentários para este item"
+                              className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white focus:shadow-sm outline-none px-2 py-1 rounded resize-y min-h-[40px] leading-relaxed ${!item.comentario ? 'text-slate-400 italic' : 'text-slate-700'}`}
+                            />
+                          </td>
+                          <td className="p-3 text-center">
+                            <button 
+                              onClick={() => removeItem(item.id)}
+                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition"
+                              title="Remover Item"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
-                <div className="mt-4 flex justify-center border-t pt-4"><button onClick={addNewItem} className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 px-4 py-2"><Plus size={16} /> Adicionar Manualmente</button></div>
+                
+                <div className="mt-4 flex justify-center border-t border-slate-100 pt-4">
+                  <button 
+                    onClick={addNewItem}
+                    className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-medium px-4 py-2 hover:bg-blue-50 rounded-lg transition"
+                  >
+                    <Plus size={16} /> Adicionar Item Manualmente
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
