@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
+import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug, Info } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -51,9 +51,9 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 const normalizeText = (text: string) => {
   return text
     .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') 
-    .replace(/([1-6])(PR|RC|RM|RO)/g, '$1 $2') 
-    .replace(/(PR|RC|RM|RO)([1-6])/g, '$1 $2') 
-    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/g, '$1') 
+    .replace(/([1-6])(PR|RC|RM|RO)/gi, '$1 $2') 
+    .replace(/(PR|RC|RM|RO)([1-6])/gi, '$1 $2') 
+    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/gi, '$1') 
     .replace(/\s{2,}/g, ' ')
     .trim();
 };
@@ -90,7 +90,7 @@ const classifyToken = (text: string) => {
 const getTokenType = (t: string) => {
   if (/^\d{1,3}$/.test(t)) return 'NUM';
   if (/^[1-6]$/.test(t)) return 'GRAU';
-  if (/^(PR|RC|RM|RO)$/.test(t)) return 'FASE';
+  if (/^(PR|RC|RM|RO)$/i.test(t)) return 'FASE';
   return 'TXT';
 };
 
@@ -123,6 +123,15 @@ const detectColumns = (lines: any[][]) => {
   };
 };
 
+const refineColumns = (items: any[], columns: any) => {
+  const graus = items.filter(i => /^[1-6]$/.test(i.text.trim())).map(i => i.x);
+  if (graus.length > 5) {
+    const avg = graus.reduce((a, b) => a + b, 0) / graus.length;
+    columns.grau = avg - 15; 
+  }
+  return columns;
+};
+
 const buildLines = (items: any[]) => {
   const map = new Map<number, any[]>();
   items.forEach((i: any) => {
@@ -137,7 +146,7 @@ const isItemStart = (line: any[]) => {
   if (!line || line.length === 0) return false;
   const text = line.map(t => t.text).join(' ').trim();
   
-  if (/^\d{1,3}\s*[-–—.:]?/.test(text)) return true;
+  if (/^\d{1,3}\s*[-–—.:]?\b/.test(text)) return true;
   if (/^\d{1,3}$/.test(text)) return true;
   
   const hasNumber = line.find(t => /^\d{1,3}$/.test(t.text));
@@ -201,12 +210,69 @@ const findNearestGrau = (itemRef: any, tokens: any[]) => {
 };
 
 // ---------------------------------------------------------------------------------
-// MÁQUINAS DE ESTADO PARA EXTRAÇÃO ESTRUTURADA
+// MÓDULO DE VALIDAÇÃO SEQUENCIAL (RECOVERY DE ITENS)
 // ---------------------------------------------------------------------------------
 
-const extractItemsFromLines = (lines: any[][], allTokens: any[]) => {
+const findMissingNumbers = (items: any[]) => {
+  const nums = items
+    .map(i => parseInt(i.numero))
+    .filter(n => !isNaN(n))
+    .sort((a, b) => a - b);
+
+  const missing: number[] = [];
+
+  for (let i = 0; i < nums.length - 1; i++) {
+    const diff = nums[i + 1] - nums[i];
+    // Identifica saltos na numeração. O limite de 15 previne varreduras irreais.
+    if (diff > 1 && diff < 15) {
+      for (let j = 1; j < diff; j++) {
+        missing.push(nums[i] + j);
+      }
+    }
+  }
+  return missing;
+};
+
+const recoverMissingItems = (missingNumbers: number[], rawText: string) => {
+  const recovered: any[] = [];
+
+  missingNumbers.forEach(num => {
+    // Busca flexível no texto normalizado para encontrar o número seguido de texto
+    const regex = new RegExp(`(?:^|\\s)${num}\\s*[-–—.:]?\\s*([^\\d]{4,60}?)(?:[1-6]|PR|RC|RM|RO|N/O|N/A|NR|\\s|$)`, 'i');
+    const match = rawText.match(regex);
+
+    if (match) {
+      let nome = match[1]
+        .replace(/(PR|RC|RM|RO|[1-6])/gi, '') // Remove resíduos de graus/fases
+        .replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '')
+        .trim();
+
+      if (nome.length > 3 && !nome.toLowerCase().includes('comentários')) {
+        recovered.push({
+          id: crypto.randomUUID(),
+          numero: String(num),
+          nome,
+          fase: '--',
+          grau: '',
+          comentario: '',
+          confidence: 0.35, // Marca com baixa confiança por ser um resgate heurístico
+          isRecovered: true
+        });
+      }
+    }
+  });
+
+  return recovered;
+};
+
+// ---------------------------------------------------------------------------------
+// EXTRATORES CONTÍNUOS
+// ---------------------------------------------------------------------------------
+
+const extractItemsFromLines = (lines: any[][], columns: any, allTokens: any[]) => {
   const items: any[] = [];
   let current: any = null;
+  const limitX = Math.min(columns.fase, columns.grau);
   
   lines.forEach((line: any[]) => {
     const startsItem = isItemStart(line);
@@ -236,13 +302,18 @@ const extractItemsFromLines = (lines: any[][], allTokens: any[]) => {
           return;
         }
 
-        if (/^(PR|RC|RM|RO)$/.test(subText)) {
+        if (/^(PR|RC|RM|RO)$/i.test(subText)) {
           current.fase = subText.toUpperCase();
           return;
         }
 
         if (!/^[\d\-]+$/.test(subText) && !/^(N\/A|N\/O|NR|--|AN\/)$/i.test(subText)) {
-          current.nome += (current.nome ? ' ' : '') + subText;
+          if (subText === '-' && current.nome.length > 10) return; 
+          if (subText.replace(/[-–—.:\s]/g, '').length > 0) {
+            if (token.x < limitX + 20) {
+              current.nome += (current.nome ? ' ' : '') + subText;
+            }
+          }
         }
       });
     });
@@ -261,7 +332,7 @@ const extractItemsFromLines = (lines: any[][], allTokens: any[]) => {
   return items;
 };
 
-const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
+const extractItemsPreSolo = (lines: any[][], columns: any, allTokens: any[]) => {
   const items: any[] = [];
   let current: any = null;
   
@@ -297,6 +368,7 @@ const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
       }
 
       if (!/^[\d\-]+$/.test(cleanText)) {
+         if (cleanText === '-' && current.nome.length > 10) return;
          current.nome += (current.nome ? ' ' : '') + cleanText;
       }
     });
@@ -316,11 +388,25 @@ const extractItemsPreSolo = (lines: any[][], allTokens: any[]) => {
 };
 
 // ---------------------------------------------------------------------------------
-// ANÁLISE DE CONFIANÇA E RENDERIZAÇÃO
+// FALLBACKS E VALIDAÇÃO
 // ---------------------------------------------------------------------------------
+
+const ultimateFallback = (items: any[], rawText: string) => {
+  const regex = /(\d{1,2})\s*[-–—.]?\s*(.*?)\s+(PR|RC|RM|RO)?\s*[\/\-]?\s*([1-6])\b/gi;
+  let match;
+  while ((match = regex.exec(rawText)) !== null) {
+    const numero = match[1];
+    let item = items.find(i => i.numero === numero);
+    if (item && !item.grau && match[4]) {
+      item.grau = match[4];
+    }
+  }
+  return items;
+};
 
 const computeConfidence = (item: any) => {
   let score = 0;
+  if (item.isRecovered) return 0.35; // Penaliza itens resgatados por dedução
   if (item.numero) score += 0.3;
   if (item.nome.length > 5) score += 0.3;
   if (item.grau) score += 0.2;
@@ -389,6 +475,7 @@ const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: any[] }) => {
 export default function App() {
   const [status, setStatus] = useState('idle'); 
   const [items, setItems] = useState<any[]>([]);
+  const [recoveredAlert, setRecoveredAlert] = useState<number[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalState, setModalState] = useState('sending');
@@ -417,6 +504,8 @@ export default function App() {
   };
 
   const processStructuredData = (rawItems: any[], fullText: string) => {
+    setRecoveredAlert([]);
+    
     const layout = detectLayoutType(fullText);
     const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
     
@@ -471,12 +560,15 @@ export default function App() {
 
     let leftCols = detectColumns(leftMerged);
     let rightCols = detectColumns(rightMerged);
+    
+    leftCols = refineColumns(cleanRawItems.filter((t:any) => t.x < 300), leftCols);
+    rightCols = refineColumns(cleanRawItems.filter((t:any) => t.x >= 300), rightCols);
 
     let tableItems: any[] = [];
     if (layout === 'PRE') {
-      tableItems = [...extractItemsPreSolo(leftMerged, cleanRawItems), ...extractItemsPreSolo(rightMerged, cleanRawItems)];
+      tableItems = [...extractItemsPreSolo(leftMerged, leftCols, cleanRawItems), ...extractItemsPreSolo(rightMerged, rightCols, cleanRawItems)];
     } else {
-      tableItems = [...extractItemsFromLines(leftMerged, cleanRawItems), ...extractItemsFromLines(rightMerged, cleanRawItems)];
+      tableItems = [...extractItemsFromLines(leftMerged, leftCols, cleanRawItems), ...extractItemsFromLines(rightMerged, rightCols, cleanRawItems)];
     }
 
     const afetivos: any[] = [];
@@ -556,6 +648,18 @@ export default function App() {
       }
     });
 
+    finalItems = ultimateFallback(finalItems, fullText);
+
+    // ETAPA DE AUDITORIA SEQUENCIAL (RECOVERY DE GAPS)
+    const missingNums = findMissingNumbers(finalItems);
+    if (missingNums.length > 0) {
+      const recovered = recoverMissingItems(missingNums, fullText);
+      if (recovered.length > 0) {
+        finalItems = [...finalItems, ...recovered];
+        setRecoveredAlert(recovered.map(r => parseInt(r.numero)).sort((a,b)=>a-b));
+      }
+    }
+
     finalItems = finalItems
       .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
       .map(i => ({ ...i, confidence: computeConfidence(i) }))
@@ -570,7 +674,7 @@ export default function App() {
 
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
-    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false);
+    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false); setRecoveredAlert([]);
     if (file.type !== 'application/pdf') { setErrorMsg('Arquivo inválido. É exigido o formato PDF.'); setStatus('idle'); return; }
     if (!window.pdfjsLib) { setErrorMsg('A dependência PDF.js não foi carregada no ambiente.'); setStatus('idle'); return; }
 
@@ -631,7 +735,7 @@ export default function App() {
     } catch { setModalState('error'); setModalMessage('Erro de rede. A exportação manual via arquivo CSV permanece disponível.'); }
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
+  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setRecoveredAlert([]); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
@@ -646,7 +750,7 @@ export default function App() {
       )}
       
       <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
-        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
+        <header className="mb-6 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
           <div className="flex items-center gap-5">
             <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
             <div><h1 className="text-3xl font-bold tracking-tight">Sistema de Extração EIA</h1><p className="text-slate-500 text-lg">Módulo de processamento analítico para fichas de instrução.</p></div>
@@ -660,8 +764,15 @@ export default function App() {
 
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
         
+        {recoveredAlert.length > 0 && (
+          <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 font-medium flex items-center gap-3">
+            <Info className="text-yellow-600 shrink-0" size={20} />
+            <span>Auditoria sequencial identificou e recuperou lacunas na estrutura primária. Itens resgatados: <strong>{recoveredAlert.join(', ')}</strong></span>
+          </div>
+        )}
+
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Carregamento de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura aplica heurística para mapeamento estrutural e vetorial de dados.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Selecionar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Carregamento de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura aplica heurística para mapeamento estrutural e validação de sequência.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Selecionar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
@@ -693,21 +804,21 @@ export default function App() {
                 <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
                 <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro do despacho do despachante final..." /></div>
+              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de avaliação final..." /></div>
             </div>
             
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
                 <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela Sintética ({items.length} instâncias mapeadas)</h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setPdfDocument(null); setDebugMode(false); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
+                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setPdfDocument(null); setDebugMode(false); setRecoveredAlert([]); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
                   <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar Dados (.CSV)</button>
                   <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Efetuar Gravação</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Aferição do grau de confiança de modelagem">C.</th><th className="p-3 w-16">Item</th><th className="p-3">Objeto de Avaliação</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Menção</th><th className="p-3">Extrato Documental Integrado</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Aferição do grau de confiança de modelagem">C.</th><th className="p-3 w-16">Nº</th><th className="p-3">Objeto de Avaliação</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Menção</th><th className="p-3">Extrato Documental Integrado</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
