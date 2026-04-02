@@ -45,112 +45,31 @@ const MetaTextarea = ({ label, value, onChange, placeholder, widthClass = "w-ful
 );
 
 // ---------------------------------------------------------------------------------
-// NOVO MOTOR LÉXICO (STREAM PARSER)
+// MÓDULOS DE PRÉ-PROCESSAMENTO 
 // ---------------------------------------------------------------------------------
 
-const parseItemsStream = (text: string) => {
-  const items: any[] = [];
-  
-  // Limpeza profunda para evitar que quebras de linha corrompam a leitura do stream
-  const clean = text
-    .replace(/MATERIAL DE ACESSO RESTRITO/gi, '')
-    .replace(/Art\. 44.*?2012/gi, '')
-    .replace(/--- PAGE \d+ ---/gi, '')
-    .replace(/\n/g, ' ')
+const normalizeText = (text: string) => {
+  return text
+    .replace(/([a-zà-ÿ])(\d)/gi, '$1 $2') // Resolve: Capota1 -> Capota 1
+    .replace(/([1-6])(PR|RC|RM|RO)/gi, '$1 $2') // Resolve: 5RO -> 5 RO
+    .replace(/(PR|RC|RM|RO)([1-6])/gi, '$1 $2') // Resolve: RM5 -> RM 5
+    .replace(/\b(PR|RC|RM|RO)\s+(PR|RC|RM|RO)\b/gi, '$1') // Duplicações OCR
     .replace(/\s{2,}/g, ' ')
     .trim();
+};
 
-  let i = 0;
-
-  const isDigit = (c: string) => /\d/.test(c || '');
-  const isLetter = (c: string) => /[A-Za-zÀ-ÿ]/.test(c || '');
-
-  const readNumber = () => {
-    let num = '';
-    while (i < clean.length && isDigit(clean[i])) {
-      num += clean[i++];
-    }
-    return num;
-  };
-
-  const skipSeparators = () => {
-    while (i < clean.length && [' ', '-', '–', '—', '.'].includes(clean[i])) i++;
-  };
-
-  const isNivel = () => {
-    const sub = clean.substring(i, i + 2).toUpperCase();
-    return ['PR', 'RO', 'RM', 'RC'].includes(sub);
-  };
-
-  const isGrau = () => {
-    const c = clean[i];
-    if (!/[1-6]/.test(c || '')) return false;
-
-    // Evita pegar números como 140kt, 1000ft
-    const next = clean[i + 1];
-    if (next && /\d/.test(next)) return false;
-    
-    // ANTI-BUG "Capota1": Se o caractere anterior for letra, é erro de digitação, não grau.
-    const prev = i > 0 ? clean[i - 1] : ' ';
-    if (isLetter(prev)) return false;
-
-    return true;
-  };
-
-  const readUntil = (stopFn: () => boolean) => {
-    let str = '';
-    while (i < clean.length && !stopFn()) {
-      str += clean[i++];
-    }
-    return str.trim();
-  };
-
-  while (i < clean.length) {
-    // 1. Procurar número de item
-    if (!isDigit(clean[i])) {
-      i++;
-      continue;
-    }
-
-    const numero = readNumber();
-    
-    // Trava de segurança para números absurdos lidos por erro
-    if (numero.length === 0 || parseInt(numero) > 60) continue;
-
-    skipSeparators();
-
-    // 2. Nome do item
-    const nome = readUntil(() => isNivel() || isGrau());
-
-    // 3 e 4. Nível e Grau (Lê em loop de 2 ciclos para suportar inversões como '5 RO' ou 'RO 5')
-    let fase = '--';
-    let grau = '';
-
-    for (let step = 0; step < 2; step++) {
-      skipSeparators();
-      if (isNivel() && fase === '--') {
-        fase = clean.substring(i, i + 2).toUpperCase();
-        i += 2;
-      } else if (isGrau() && grau === '') {
-        grau = clean[i];
-        i++;
-      }
-    }
-
-    // Validação Final (ANTI BUG)
-    if (nome.length >= 3) {
-      items.push({
-        id: crypto.randomUUID(),
-        numero,
-        nome: nome.replace(/\b[1-6]\b/g, '').trim(), // Remoção de sujeira numérica residual
-        fase,
-        grau,
-        comentario: ''
-      });
-    }
-  }
-
-  return items;
+const isNoise = (text: string) => {
+  const t = text.toUpperCase().trim();
+  return (
+    t.includes('MATERIAL DE ACESSO RESTRITO') ||
+    t.includes('COMANDO DA AERONÁUTICA') ||
+    t.includes('ESQUADRÃO') ||
+    t.includes('T-27') ||
+    t.includes('PÁGINA') ||
+    /^\d+\s+DE\s+\d+$/.test(t) ||
+    /^PROTOCOLO/i.test(t) ||
+    t.length < 2
+  );
 };
 
 // ---------------------------------------------------------------------------------
@@ -183,10 +102,11 @@ export default function App() {
     setMeta(prev => { const newMeta = { ...prev, [field]: value }; if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) newMeta.grauMissao = ''; return newMeta; });
   };
 
-  const processStructuredData = (globalCleanText: string) => {
+  const processStructuredData = (rawTokens: any[], fullText: string) => {
     
-    // EXTRAÇÃO DE METADADOS
-    const cleanHeader = globalCleanText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    // 1. CABEÇALHO E METADADOS
+    const cleanHeader = fullText.substring(0, 1500).replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ');
+    
     const matchGrauMissao = cleanHeader.match(/GRAU\s*(\d{1,2})/i);
     let tipoMissaoDetectado = 'Normal';
     if (cleanHeader.match(/\bExtra\b/i)) tipoMissaoDetectado = 'Extra';
@@ -207,27 +127,119 @@ export default function App() {
       pousos: cleanHeader.match(/POUSOS[\s:]*(\d{1,2})\b/i)?.[1] || '',
       grauMissao: (tipoMissaoDetectado === 'Abortiva' || tipoMissaoDetectado === 'Extra') ? '' : (matchGrauMissao ? matchGrauMissao[1] : ''),
       tipoMissao: tipoMissaoDetectado, hdep, tev,
-      parecer: (globalCleanText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
+      parecer: (fullText.match(/Recomendações\/Parecer:\s*([\s\S]*?)(?=\bCiente\b|INSTRUTOR|Autoridade|Ass\. Digital|$)/i)?.[1] || '').replace(/[\n\r]/g, ' ').replace(/\s{2,}/g, ' ').trim()
     }));
 
-    // ISOLAR A TABELA VIA TEXTO E APLICAR O NOVO STREAM PARSER
-    const extractTableArea = (text: string) => {
-      const start = text.search(/\b1\s*[-–—]?\s*/);
-      const end = text.search(/Itens Afetivos|Comentários:/i);
-      if (start === -1) return '';
-      return text.substring(start, end !== -1 ? end : text.length);
+    // 2. ISOLAR A TABELA GEOMETRICAMENTE (Evita colapso Esquerda vs Direita)
+    const mapY = new Map<number, any[]>();
+    rawTokens.forEach((it: any) => {
+        const y = Math.round(it.y / 5) * 5; 
+        if (!mapY.has(y)) mapY.set(y, []);
+        mapY.get(y)!.push(it);
+    });
+
+    const allLines = Array.from(mapY.entries())
+        .sort((a, b) => b[0] - a[0])
+        .map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
+
+    let tableLines: any[][] = [];
+    let isTable = false;
+    let tableFinished = false;
+
+    allLines.forEach((line: any[]) => {
+      const text = line.map((t: any) => t.text).join(' ');
+      if (/(Itens Afetivos|Cognitivos|Comentários:|Recomendações\/Parecer:|Ass\. Digital)/i.test(text)) { 
+        isTable = false; tableFinished = true; 
+      }
+      if (!tableFinished && /\b1\s*[-–—]?\s*(Partida|Voo sob Capota)/i.test(text)) {
+        isTable = true;
+      }
+      if (isTable) tableLines.push(line);
+    });
+
+    // Divide a tela no meio (X = 300)
+    const leftLines: any[][] = [];
+    const rightLines: any[][] = [];
+    tableLines.forEach((line: any[]) => {
+      const left = line.filter((t: any) => t.x < 300);
+      const right = line.filter((t: any) => t.x >= 300);
+      if (left.length > 0) leftLines.push(left);
+      if (right.length > 0) rightLines.push(right);
+    });
+
+    // 3. QUEBRAR EM LINHAS REAIS (Agrupamento Textual)
+    const mergeLinesToStrings = (linesCol: any[][]) => {
+      const merged: string[] = [];
+      for(let line of linesCol) {
+        const text = line.map(t=>t.text).join(' ').trim();
+        // Se a linha inicia com número, é um novo item
+        if (/^\d{1,2}\s*[-–—.:]?\b/.test(text) || /^\d{1,2}$/.test(text)) {
+          merged.push(text);
+        } else if (merged.length > 0) {
+          // Se não, anexa ao item anterior (quebra de linha do nome da manobra)
+          merged[merged.length - 1] += ' ' + text;
+        }
+      }
+      return merged;
     };
 
-    const tableArea = extractTableArea(globalCleanText);
-    
-    // Passa a área da tabela bruta pelo analisador de fluxo
-    let finalItems = parseItemsStream(tableArea);
+    const leftStrings = mergeLinesToStrings(leftLines);
+    const rightStrings = mergeLinesToStrings(rightLines);
+    const allTableStrings = [...leftStrings, ...rightStrings];
 
-    // EXTRAÇÃO DE ITENS AFETIVOS
-    const idxAfetivos = globalCleanText.search(/Itens Afetivos/i);
-    const idxComentarios = globalCleanText.search(/Comentários:/i);
+    // 4. PARSER DE LINHA (A lógica determinística)
+    const parseItemLine = (line: string) => {
+      const match = line.match(/^(\d{1,2})\s*[-–—.:]?\s*(.+)/);
+      if (!match) return null;
+
+      const numero = match[1];
+      let resto = match[2];
+
+      // Grau: Último número 1-6 isolado na linha (exclui 140kt, 1000ft)
+      let grau = '';
+      const grauMatch = resto.match(/\b([1-6])\b(?!.*\b[1-6]\b)/);
+      if (grauMatch) grau = grauMatch[1];
+
+      // Fase: Procura as siglas específicas
+      let fase = '';
+      const faseMatch = resto.match(/\b(PR|RC|RM|RO)\b/i);
+      if (faseMatch) fase = faseMatch[1].toUpperCase();
+
+      // Limpeza do Nome
+      let nome = resto;
+      if (fase) nome = nome.replace(new RegExp(`\\b${fase}\\b`, 'i'), '');
+      if (grau) {
+        const lastIdx = nome.lastIndexOf(grau);
+        if (lastIdx !== -1) {
+          nome = nome.substring(0, lastIdx) + nome.substring(lastIdx + 1);
+        }
+      }
+      nome = nome.replace(/\s{2,}/g, ' ').replace(/^[-–—.:\s]+|[-–—.:\s]+$/g, '').trim();
+
+      return {
+        id: crypto.randomUUID(),
+        numero,
+        nome,
+        fase: fase || '--',
+        grau,
+        comentario: ''
+      };
+    };
+
+    const tableItems: any[] = [];
+    for (let str of allTableStrings) {
+      const parsed = parseItemLine(str);
+      if (parsed && parsed.nome.length >= 2) {
+        tableItems.push(parsed);
+      }
+    }
+
+    // 5. EXTRAÇÃO DE ITENS AFETIVOS
+    const afetivos: any[] = [];
+    const idxAfetivos = fullText.search(/Itens Afetivos/i);
+    const idxComentarios = fullText.search(/Comentários:/i);
     if (idxAfetivos !== -1) {
-      const section = globalCleanText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : globalCleanText.length);
+      const section = fullText.substring(idxAfetivos, idxComentarios !== -1 ? idxComentarios : fullText.length);
       const afetivoRegex = /([A-Za-zÀ-ÿ0-9\s\-\(\)\.,\/\u0300-\u036f]+?)\s+(NORMAL|DESTACOU-SE|PRECISA MELHORAR|DEFICIENTE|ABAIXO DO PADRÃO|PERIGOSO|N\/O|N\/A|NR|--)\b/gi;
       let matchA;
       while ((matchA = afetivoRegex.exec(section)) !== null) {
@@ -237,14 +249,16 @@ export default function App() {
         const numMatch = rawNome.match(/^(\d{1,2})\s*[-–—.:]?\s*(.*)$/);
         if (numMatch) { numeroA = numMatch[1]; rawNome = numMatch[2].trim(); }
         if (rawNome.length > 3 && !/esquadrão/i.test(rawNome)) {
-            finalItems.push({ id: crypto.randomUUID(), numero: numeroA, nome: rawNome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
+            afetivos.push({ id: crypto.randomUUID(), numero: numeroA, nome: rawNome, fase: '--', grau: ['--', 'N/O', 'N/A', 'NR'].includes(grauA) ? '' : grauA, comentario: '' });
         }
       }
     }
 
-    // EXTRAÇÃO DE COMENTÁRIOS DA SEÇÃO FINAL
+    // 6. ASSOCIAÇÃO DE COMENTÁRIOS E CORREÇÃO FINAL
+    let finalItems = [...tableItems, ...afetivos]; 
+
     if (idxComentarios !== -1) {
-      const commentsSection = globalCleanText.substring(idxComentarios);
+      const commentsSection = fullText.substring(idxComentarios);
       const commentRegex = /(?:^|\n|\s)(\d{1,2})\s*[-–—]\s*([A-Za-zÀ-ÿ0-9\s/]+?)(?:\s*\(\s*([^)]+)\s*\)\s*:?|\s*:)/gi;
       const matches: any[] = [];
       let commentMatch;
@@ -275,60 +289,67 @@ export default function App() {
         if (item) {
           item.comentario = rawComentario;
         } else {
-          finalItems.push({ id: crypto.randomUUID(), numero: current.numero, nome: 'Resgatado via Comentário', fase: '--', grau: '', comentario: rawComentario });
+          // Fallback: se o item só existe no comentário
+          finalItems.push({ id: crypto.randomUUID(), numero: current.numero, nome: 'Item Resgatado via Comentário', fase: '--', grau: '', comentario: rawComentario });
         }
       }
     }
 
-    // CORREÇÃO E ORDENAÇÃO
+    finalItems.forEach(item => {
+      if (!item.nome || item.nome.length < 3) item.nome = 'Item não identificado';
+      if (!item.grau) item.grau = '';
+      if (!item.fase) item.fase = '--';
+    });
+
     finalItems = finalItems
       .filter((i: any) => i.nome.length > 2 && !/esquadrão/i.test(i.nome))
       .sort((a: any, b: any) => parseInt(a.numero || '999') - parseInt(b.numero || '999'));
 
     if (finalItems.length > 0) { setItems(finalItems); setStatus('reviewing'); setErrorMsg(''); } 
-    else { setErrorMsg('Falha na extração lexical.'); setStatus('idle'); }
+    else { setErrorMsg('Falha na extração. Estrutura do documento incompreensível.'); setStatus('idle'); }
   };
 
   const handleFileUpload = async (e: any) => {
     const file = e.target.files[0];
     if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg('');
-    if (file.type !== 'application/pdf') { setErrorMsg('Arquivo inválido. Selecione um formato PDF.'); setStatus('idle'); return; }
+    if (file.type !== 'application/pdf') { setErrorMsg('Arquivo inválido. É exigido o formato PDF.'); setStatus('idle'); return; }
     if (!window.pdfjsLib) { setErrorMsg('O leitor de PDF não foi carregado adequadamente.'); setStatus('idle'); return; }
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      let globalCleanText = '';
+      const rawTokens: any[] = [];
+      let fullText = '';
 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        
-        // Reconstrução Y para manter a consistência da leitura da esquerda pra direita
-        const pageItems = textContent.items.map((it: any) => ({
-            text: it.str.trim(),
-            x: it.transform[4],
-            y: Math.round(it.transform[5] / 5) * 5
-        })).filter((it: any) => it.text.length > 0);
+        const pageOffsetY = (pdf.numPages - i) * 3000; 
 
-        const mapY = new Map<number, any[]>();
-        pageItems.forEach((it: any) => {
-            if (!mapY.has(it.y)) mapY.set(it.y, []);
-            mapY.get(it.y)!.push(it);
+        textContent.items.forEach((it: any) => {
+          let text = normalizeText(it.str);
+          if (text.length > 0 && !isNoise(text)) {
+            rawTokens.push({ text, x: it.transform[4], y: it.transform[5] + pageOffsetY });
+          }
         });
 
-        const lines = Array.from(mapY.entries())
-            .sort((a, b) => b[0] - a[0])
-            .map(([_, line]) => line.sort((a: any, b: any) => a.x - b.x));
-
-        for (const line of lines) {
-            globalCleanText += line.map(t => t.text).join(' ') + '\n';
+        // Extração FullText para a leitura contínua de Comentários
+        let sortedForText = [...textContent.items].sort((a: any, b: any) => {
+          if (Math.abs(a.transform[5] - b.transform[5]) > 5) return b.transform[5] - a.transform[5];
+          return a.transform[4] - b.transform[4];
+        });
+        
+        let lastY = null;
+        for (const it of sortedForText) {
+           if (lastY !== null && Math.abs(it.transform[5] - lastY) > 5) fullText += '\n';
+           else if (lastY !== null) fullText += ' ';
+           fullText += normalizeText(it.str); lastY = it.transform[5];
         }
-        globalCleanText += '\n\n';
+        fullText += '\n\n';
       }
       
-      processStructuredData(globalCleanText);
-    } catch (err) { setErrorMsg('O processamento falhou devido a integridade do arquivo.'); setStatus('idle'); }
+      processStructuredData(rawTokens, fullText);
+    } catch (err) { setErrorMsg('Falha no processamento do documento.'); setStatus('idle'); }
   };
 
   const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
@@ -352,7 +373,7 @@ export default function App() {
       const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(buildPayload()) });
       if (res.ok) { setModalState('success'); setModalMessage('Integração com a base de dados concluída.'); } 
       else throw new Error('A requisição falhou.');
-    } catch { setModalState('error'); setModalMessage('Erro de conexão com o banco.'); }
+    } catch { setModalState('error'); setModalMessage('Erro de conexão com o banco de dados.'); }
   };
 
   const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
@@ -362,7 +383,7 @@ export default function App() {
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
-            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando com a base de dados...</p></>)}
+            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando registros...</p></>)}
             {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Avaliação</button></>)}
             {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Falha Operacional</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
           </div>
@@ -370,27 +391,25 @@ export default function App() {
       )}
       
       <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
-        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
-          <div className="flex items-center gap-5">
-            <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-            <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento de Fichas via Stream Parser.</p></div>
-          </div>
+        <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center gap-5">
+          <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
+          <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento Geométrico Integrado.</p></div>
         </header>
 
         {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
 
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. Sistema operando sob análise léxica contínua.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
         )}
         
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Lendo caracteres e categorizando tokens lexicais...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Mapeando posições e separando colunas...</p></div>
         )}
         
         {status === 'reviewing' && (
           <div className="space-y-6 relative z-10">
             <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
-              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho da Missão</h3>
+              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Estrutura da Missão</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
                 <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
                 <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
@@ -413,27 +432,27 @@ export default function App() {
                 <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela de Avaliação ({items.length} itens)</h2>
                 <div className="flex flex-wrap gap-3">
                   <button onClick={() => { setStatus('idle'); setItems([]); setErrorMsg(''); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
-                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
-                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Salvar Registros</button>
+                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar Dados (.CSV)</button>
+                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Efetuar Gravação</button>
                 </div>
               </div>
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Nº</th><th className="p-3">Manobra / Competência</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
+                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-16">Nº</th><th className="p-3">Objeto de Avaliação</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Menção</th><th className="p-3">Extrato Documental Integrado</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
                   <tbody className="text-sm">
                     {items.map((it) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
                         <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item de avaliação..." /></td>
+                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Atributo avaliado..." /></td>
                         <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
                         <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar dados..." /></td>
+                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar registro verbal..." /></td>
                         <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserir Linha Manual</button></div>
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserção de Linha de Contingência</button></div>
               </div>
             </div>
           </div>
