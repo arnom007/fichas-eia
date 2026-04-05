@@ -547,6 +547,18 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
     comments.set(currentItemNum, currentText.trim());
   }
 
+  // Remove o cabeçalho dos comentários: "Nome do Item (FASE/GRAU):" → fica só o texto
+  for (const [key, value] of comments.entries()) {
+    // Padrão: "Nivelamento (RO/5): texto real" ou "Comentários Gerais (/NORMAL): texto"
+    const cleaned = value
+      .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')  // Remove "Nome (FASE/GRAU): "
+      .replace(/^[-–—]\s*/, '')                  // Remove traço residual
+      .trim();
+    if (cleaned.length > 0) {
+      comments.set(key, cleaned);
+    }
+  }
+
   return comments;
 };
 
