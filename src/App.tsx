@@ -352,14 +352,6 @@ const extractEvaluationItems = (tokens: PdfToken[]): ExtractedItem[] => {
 // EXTRAÇÃO DE ITENS AFETIVOS-COGNITIVOS
 // ---------------------------------------------------------------------------------
 
-const AFFECTIVE_GRADES: Record<string, string> = {
-  'PERIGOSO': '1',
-  'DEFICIENTE': '2',
-  'PRECISA MELHORAR': '3',
-  'NORMAL': '4',
-  'DESTACOU-SE': '5',
-};
-
 const extractAffectiveItems = (tokens: PdfToken[]): ExtractedItem[] => {
   const items: ExtractedItem[] = [];
   
@@ -446,15 +438,14 @@ const extractAffectiveItems = (tokens: PdfToken[]): ExtractedItem[] => {
     if (!isAffective) continue;
 
     const gradeText = gradeToken.text.trim().toUpperCase();
-    const gradeNum = AFFECTIVE_GRADES[gradeText] || '4';
 
     items.push({
       id: crypto.randomUUID(),
       numero: String(itemCounter++),
       nome: name,
       fase: '--',
-      grau: gradeNum,
-      comentario: gradeText,
+      grau: gradeText,
+      comentario: '',
     });
   }
 
