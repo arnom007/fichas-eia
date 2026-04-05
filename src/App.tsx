@@ -459,30 +459,39 @@ const extractAffectiveItems = (tokens: PdfToken[]): ExtractedItem[] => {
 const extractComments = (tokens: PdfToken[]): Map<string, string> => {
   const comments = new Map<string, string>();
 
-  // Encontra seção de comentários
+  // Encontra todas as seções "Comentários:" em qualquer página
   const commentsSections = tokens.filter(t => /^Coment[áa]rios:$/i.test(t.text.trim()));
   
   if (commentsSections.length === 0) return comments;
 
-  // Coleta todos tokens de comentários (na seção de comentários e página 2)
+  // Coleta tokens de comentários de TODAS as páginas
   const commentTokens = tokens.filter(t => {
-    // Tokens abaixo da seção "Comentários:" na página 1
-    const commentSection = commentsSections.find(cs => cs.page === t.page);
-    if (commentSection && t.y < commentSection.y && t.y > 50) {
-      // Exclui assinaturas e rodapés
-      if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+)/i.test(t.text.trim())) return false;
+    const txt = t.text.trim();
+    if (txt.length === 0) return false;
+    
+    // Exclui assinaturas e rodapés em qualquer página
+    if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
+
+    // Verifica se está numa zona de comentários em qualquer página
+    const pageCommentSection = commentsSections.find(cs => cs.page === t.page);
+    if (pageCommentSection && t.y < pageCommentSection.y && t.y > 50) {
       return true;
     }
-    // Tokens na página 2 que são continuação de comentários
-    if (t.page === 2 && t.y > 300) {
-      const p2CommentSection = tokens.find(cs => cs.page === 2 && /^Coment[áa]rios:$/i.test(cs.text.trim()));
-      if (p2CommentSection && t.y <= p2CommentSection.y) return true;
-      // Ou se não tem seção de comentários na p2, mas tem tokens de comentário
-      if (!p2CommentSection) {
-        if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(t.text.trim())) return false;
+
+    // Para páginas que continuam comentários da página anterior (sem ter seu próprio "Comentários:")
+    // mas que têm conteúdo de comentário (começando com "N -" ou texto de continuação)
+    if (!pageCommentSection && t.page > 1 && t.y > 50 && t.y < 790) {
+      // Verifica se a página anterior tinha uma seção de comentários
+      const prevPageHasComments = commentsSections.some(cs => cs.page < t.page);
+      if (prevPageHasComments) {
+        if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
+        // Exclui nomes/assinaturas
+        if (/^[A-Z]{2,}\s*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad)\b/i.test(txt)) return false;
+        if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
         return true;
       }
     }
+
     return false;
   }).sort((a, b) => {
     if (a.page !== b.page) return a.page - b.page;
@@ -524,7 +533,6 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
 
     // Continuação do comentário
     if (currentItemNum) {
-      // Trata o header do comentário como parte do texto (ex: "Nivelamento (RO/5):")
       if (currentText.length === 0 && token.x > 50) {
         currentText = txt;
       } else {
@@ -722,11 +730,92 @@ export default function App() {
       // 5. Comentários
       const comments = extractComments(allTokens);
       
-      // 6. Associa comentários aos itens
+      // 6. Associa comentários aos itens de avaliação (por número direto)
       for (const item of evalItems) {
         const comment = comments.get(item.numero);
         if (comment) {
           item.comentario = comment;
+        }
+      }
+
+      // 7. Associa comentários aos itens afetivos (por nome no cabeçalho do comentário)
+      // No PDF, comentários de itens afetivos usam numeração diferente (ex: 41, 51)
+      // e o cabeçalho original contém o nome do item: "Aplicação de NPA (/DESTACOU-SE):"
+      // Precisamos fazer o match pelo nome do item afetivo
+      const normalize = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+      
+      // Guarda os cabeçalhos originais antes da limpeza para fazer o match
+      // Re-extraímos os comentários sem a limpeza de header para obter o texto original
+      const rawComments = new Map<string, string>();
+      {
+        let curNum = '';
+        let curTxt = '';
+        const commentsSections2 = allTokens.filter((t: PdfToken) => /^Coment[áa]rios:$/i.test(t.text.trim()));
+        const allCommentTokens = allTokens.filter((t: PdfToken) => {
+          const txt = t.text.trim();
+          if (txt.length === 0) return false;
+          if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
+          const pageCS = commentsSections2.find((cs: PdfToken) => cs.page === t.page);
+          if (pageCS && t.y < pageCS.y && t.y > 50) return true;
+          if (!pageCS && t.page > 1 && t.y > 50 && t.y < 790) {
+            if (commentsSections2.some((cs: PdfToken) => cs.page < t.page)) {
+              if (/^[A-Z]{2,}\s*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad)\b/i.test(txt)) return false;
+              if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
+              return true;
+            }
+          }
+          return false;
+        }).sort((a: PdfToken, b: PdfToken) => {
+          if (a.page !== b.page) return a.page - b.page;
+          if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
+          return a.x - b.x;
+        });
+
+        for (const token of allCommentTokens) {
+          const txt = token.text.trim();
+          if (!txt) continue;
+          const m = txt.match(/^(\d{1,3})\s*[-–—]/);
+          if (m) {
+            if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+            curNum = m[1];
+            curTxt = txt.replace(/^\d{1,3}\s*[-–—]\s*/, '').trim();
+          } else if (/^\d{1,3}$/.test(txt) && token.x < 50) {
+            if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+            curNum = txt;
+            curTxt = '';
+          } else if (curNum) {
+            curTxt += (curTxt ? ' ' : '') + txt;
+          }
+        }
+        if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+      }
+
+      // Agora itera sobre os rawComments para associar aos itens afetivos pelo nome
+      for (const [commentNum, rawText] of rawComments.entries()) {
+        // Se já foi associado a um evalItem, pular
+        if (evalItems.some(i => i.numero === commentNum)) continue;
+
+        // Extrai o nome do cabeçalho: "Aplicação de NPA (/DESTACOU-SE):" → "Aplicação de NPA"
+        const headerMatch = rawText.match(/^([^(/]+)/);
+        if (!headerMatch) continue;
+        const commentItemName = normalize(headerMatch[1]);
+
+        // Busca o item afetivo correspondente pelo nome
+        const matchedAff = affItems.find(aff => {
+          const affName = normalize(aff.nome);
+          // Match se o nome do comentário contém o início do nome do item afetivo
+          return commentItemName.includes(affName.substring(0, 8)) || affName.includes(commentItemName.substring(0, 8));
+        });
+
+        if (matchedAff) {
+          // Limpa o cabeçalho e atribui o comentário
+          const cleaned = rawText
+            .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')
+            .replace(/^[-–—]\s*/, '')
+            .trim();
+          if (cleaned.length > 0) {
+            matchedAff.comentario = cleaned;
+          }
         }
       }
       
