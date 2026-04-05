@@ -465,12 +465,24 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
   if (commentsSections.length === 0) return comments;
 
   // Coleta tokens de comentários de TODAS as páginas
+  // Detecta limites inferiores: "Recomendações/Parecer:" marca o fim dos comentários na página
+  const parecerBoundaries = tokens.filter(t => /Recomenda[çc][õo]es\/Parecer/i.test(t.text));
+
   const commentTokens = tokens.filter(t => {
     const txt = t.text.trim();
     if (txt.length === 0) return false;
     
-    // Exclui assinaturas e rodapés em qualquer página
-    if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
+    // Exclui assinaturas, rodapés e metadados em qualquer página
+    if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente|Prossegue)/i.test(txt)) return false;
+    // Exclui nomes com posto/graduação (assinaturas)
+    if (/^[A-Z]{2,}.*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad|Cmte)\b/i.test(txt)) return false;
+    if (/[-–—]\s*(Maj|Cap|Ten|Cel|Cad|Cmte)\s+(QOAV|CFOAV)/i.test(txt)) return false;
+    // Exclui tokens com datas de assinatura
+    if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
+
+    // Verifica se está abaixo do "Recomendações/Parecer:" na mesma página (= fora da zona de comentários)
+    const parecerOnPage = parecerBoundaries.find(p => p.page === t.page);
+    if (parecerOnPage && t.y <= parecerOnPage.y) return false;
 
     // Verifica se está numa zona de comentários em qualquer página
     const pageCommentSection = commentsSections.find(cs => cs.page === t.page);
@@ -478,16 +490,10 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
       return true;
     }
 
-    // Para páginas que continuam comentários da página anterior (sem ter seu próprio "Comentários:")
-    // mas que têm conteúdo de comentário (começando com "N -" ou texto de continuação)
+    // Para páginas que continuam comentários da página anterior
     if (!pageCommentSection && t.page > 1 && t.y > 50 && t.y < 790) {
-      // Verifica se a página anterior tinha uma seção de comentários
       const prevPageHasComments = commentsSections.some(cs => cs.page < t.page);
       if (prevPageHasComments) {
-        if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
-        // Exclui nomes/assinaturas
-        if (/^[A-Z]{2,}\s*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad)\b/i.test(txt)) return false;
-        if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
         return true;
       }
     }
@@ -751,16 +757,20 @@ export default function App() {
         let curNum = '';
         let curTxt = '';
         const commentsSections2 = allTokens.filter((t: PdfToken) => /^Coment[áa]rios:$/i.test(t.text.trim()));
+        const parecerBoundaries2 = allTokens.filter((t: PdfToken) => /Recomenda[çc][õo]es\/Parecer/i.test(t.text));
         const allCommentTokens = allTokens.filter((t: PdfToken) => {
           const txt = t.text.trim();
           if (txt.length === 0) return false;
-          if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente)/i.test(txt)) return false;
+          if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente|Prossegue)/i.test(txt)) return false;
+          if (/^[A-Z]{2,}.*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad|Cmte)\b/i.test(txt)) return false;
+          if (/[-–—]\s*(Maj|Cap|Ten|Cel|Cad|Cmte)\s+(QOAV|CFOAV)/i.test(txt)) return false;
+          if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
+          const parecerOnPage = parecerBoundaries2.find((p: PdfToken) => p.page === t.page);
+          if (parecerOnPage && t.y <= parecerOnPage.y) return false;
           const pageCS = commentsSections2.find((cs: PdfToken) => cs.page === t.page);
           if (pageCS && t.y < pageCS.y && t.y > 50) return true;
           if (!pageCS && t.page > 1 && t.y > 50 && t.y < 790) {
             if (commentsSections2.some((cs: PdfToken) => cs.page < t.page)) {
-              if (/^[A-Z]{2,}\s*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad)\b/i.test(txt)) return false;
-              if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
               return true;
             }
           }
