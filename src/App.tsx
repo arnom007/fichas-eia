@@ -62,16 +62,6 @@ const extractMetadata = (tokens: PdfToken[]) => {
   // Trabalha apenas com tokens da primeira página, região do cabeçalho (y > 670)
   const headerTokens = tokens.filter(t => t.page === 1 && t.y > 670);
   
-  // Agrupa tokens por linha (Y próximos)
-  const getLineText = (yMin: number, yMax: number) => {
-    return headerTokens
-      .filter(t => t.y >= yMin && t.y <= yMax)
-      .sort((a, b) => a.x - b.x)
-      .map(t => t.text.trim())
-      .filter(t => t.length > 0)
-      .join(' ');
-  };
-  
   // Busca token que segue um label
   const findValueAfterLabel = (labelPattern: RegExp, yTolerance = 5) => {
     const labelToken = headerTokens.find(t => labelPattern.test(t.text.trim()));
