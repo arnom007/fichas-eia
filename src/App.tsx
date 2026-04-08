@@ -559,6 +559,7 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
     const cleaned = value
       .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')  // Remove "Nome (FASE/GRAU): "
       .replace(/^[-–—]\s*/, '')                  // Remove traço residual
+      .replace(/\s+\d+\s+de\s+\d+\s*$/i, '')    // Remove índice de página residual ("1 de 2")
       .trim();
     if (cleaned.length > 0) {
       comments.set(key, cleaned);
@@ -823,6 +824,7 @@ export default function App() {
           const cleaned = rawText
             .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')
             .replace(/^[-–—]\s*/, '')
+            .replace(/\s+\d+\s+de\s+\d+\s*$/i, '')  // Remove índice de página residual
             .trim();
           if (cleaned.length > 0) {
             matchedAff.comentario = cleaned;
