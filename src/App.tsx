@@ -491,7 +491,8 @@ const extractComments = (tokens: PdfToken[]): Map<string, string> => {
     }
 
     // Para páginas que continuam comentários da página anterior
-    if (!pageCommentSection && t.page > 1 && t.y > 50 && t.y < 790) {
+    // Usa y < 760 para excluir cabeçalho da página (onde fica o "1 de 2")
+    if (!pageCommentSection && t.page > 1 && t.y > 50 && t.y < 760) {
       const prevPageHasComments = commentsSections.some(cs => cs.page < t.page);
       if (prevPageHasComments) {
         return true;
@@ -769,7 +770,7 @@ export default function App() {
           if (parecerOnPage && t.y <= parecerOnPage.y) return false;
           const pageCS = commentsSections2.find((cs: PdfToken) => cs.page === t.page);
           if (pageCS && t.y < pageCS.y && t.y > 50) return true;
-          if (!pageCS && t.page > 1 && t.y > 50 && t.y < 790) {
+          if (!pageCS && t.page > 1 && t.y > 50 && t.y < 760) {
             if (commentsSections2.some((cs: PdfToken) => cs.page < t.page)) {
               return true;
             }
