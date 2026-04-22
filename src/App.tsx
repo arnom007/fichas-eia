@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug } from 'lucide-react';
+import { Upload, FileText, Check, Download, RefreshCw, AlertCircle, Trash2, Plus, Zap, CheckCircle2, XCircle, Bug, X } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -7,6 +7,9 @@ declare global {
   }
 }
 
+// ---------------------------------------------------------------------------------
+// UTILITÁRIO: Cor do texto baseada no grau/menção
+// ---------------------------------------------------------------------------------
 const getGradeColorClass = (grau: string) => {
   const g = grau?.toUpperCase().trim() || '';
   if (g === '1' || g === 'PERIGOSO' || g === '2' || g === 'DEFICIENTE') return 'text-red-500 font-bold';
@@ -16,6 +19,10 @@ const getGradeColorClass = (grau: string) => {
   if (g === '6') return 'text-blue-800 font-bold';
   return 'text-slate-900 font-medium';
 };
+
+// ---------------------------------------------------------------------------------
+// COMPONENTES DE FORMULÁRIO REUTILIZÁVEIS
+// ---------------------------------------------------------------------------------
 
 const MetaInput = ({ label, value, onChange, placeholder, maxLength, widthClass = "w-full", disabled = false }: any) => (
   <div className={widthClass}>
@@ -655,338 +662,1059 @@ const PdfViewer = ({ pdf, tokens }: { pdf: any, tokens: PdfToken[] }) => {
 };
 
 // ---------------------------------------------------------------------------------
-// COMPONENTE PRINCIPAL (APP)
+// INTERFACES E TIPOS PARA O SISTEMA MULTI-FICHA
+// ---------------------------------------------------------------------------------
+
+// Metadados do cabeçalho de cada ficha (esquadrilha, aluno, missão, etc.)
+// Cada campo corresponde a um dado extraído do PDF ou preenchido manualmente
+interface MetaData {
+  esquadrilha: string;  // Esquadrilha do aluno (Antares, Vega, Castor, Sirius)
+  aluno1p: string;      // Trigrama do 1P / Aluno (ex: MTA) — OBRIGATÓRIO
+  instrutor: string;    // Trigrama do Instrutor IN (ex: MOT) — OBRIGATÓRIO
+  fase: string;         // Fase da missão (PRÉ-SOLO, INSTRUMENTO BÁSICO, etc.)
+  aeronave: string;     // Matrícula / código da aeronave
+  data: string;         // Data da missão
+  missao: string;       // Código da missão (ex: PS-01, VI-03)
+  grauMissao: string;   // Grau geral da missão (1-6)
+  tipoMissao: string;   // Tipo: Normal, Abortiva, Extra, Revisão
+  pousos: string;       // Quantidade de pousos
+  hdep: string;         // Hora de decolagem
+  tev: string;          // Tempo efetivo de voo
+  parecer: string;      // Parecer/recomendações do comandante
+}
+
+// Cada aba (tab) = uma ficha PDF carregada com seus dados extraídos
+interface FichaTab {
+  id: string;                // Identificador único da aba
+  fileName: string;          // Nome do arquivo PDF original (ex: "Ficha_MTA_PS-01.pdf")
+  meta: MetaData;            // Metadados extraídos do cabeçalho
+  items: any[];              // Itens de avaliação (notas, competências, afetivos)
+  pdfDocument: any;          // Referência ao documento PDF (para o visualizador debug)
+  rawPdfTokens: PdfToken[];  // Tokens brutos da página 1 (para debug)
+}
+
+// Status individual do envio de cada ficha (usado no popup de progresso)
+interface SendStatus {
+  fileName: string;                                     // Nome do arquivo
+  status: 'waiting' | 'sending' | 'success' | 'error';  // Estado atual do envio
+  message?: string;                                      // Mensagem descritiva (erro, etc.)
+}
+
+// Valores padrão para metadados de uma nova ficha
+const INITIAL_META: MetaData = {
+  esquadrilha: '', aluno1p: '', instrutor: '', fase: '',
+  aeronave: '', data: '', missao: '', grauMissao: '',
+  tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: ''
+};
+
+// ---------------------------------------------------------------------------------
+// COMPONENTE PRINCIPAL (APP) — VERSÃO MULTI-FICHA COM SISTEMA DE ABAS
 // ---------------------------------------------------------------------------------
 
 export default function App() {
-  const [status, setStatus] = useState('idle'); 
-  const [items, setItems] = useState<any[]>([]);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [showModal, setShowModal] = useState(false);
-  const [modalState, setModalState] = useState('sending');
-  const [modalMessage, setModalMessage] = useState('');
-  
-  const [debugMode, setDebugMode] = useState(false);
-  const [rawPdfTokens, setRawPdfTokens] = useState<PdfToken[]>([]);
-  const [pdfDocument, setPdfDocument] = useState<any>(null);
 
+  // ============================================================================
+  // ESTADO PRINCIPAL
+  // ============================================================================
+
+  // Array de fichas carregadas — cada ficha é uma aba com seus próprios dados
+  const [tabs, setTabs] = useState<FichaTab[]>([]);
+
+  // Índice da aba ativa (a que está sendo visualizada/editada no momento)
+  const [activeTabIndex, setActiveTabIndex] = useState(0);
+
+  // Status geral: 'idle' = aguardando upload, 'loading' = processando PDFs, 'reviewing' = revisando fichas
+  const [status, setStatus] = useState<string>('idle');
+
+  // Mensagem de erro exibida no topo da página
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Modo debug: exibe visualização dos tokens extraídos do PDF
+  const [debugMode, setDebugMode] = useState(false);
+
+  // Progresso do carregamento de múltiplos PDFs (ex: "Processando 3 de 5")
+  const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+
+  // ============================================================================
+  // ESTADO DOS POPUPS
+  // ============================================================================
+
+  // Popup de confirmação: "Todas as fichas verificadas?"
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+
+  // Popup de progresso do envio (barra de progresso + tasklist)
+  const [showProgressDialog, setShowProgressDialog] = useState(false);
+
+  // Lista de status individuais de envio de cada ficha
+  const [sendStatuses, setSendStatuses] = useState<SendStatus[]>([]);
+
+  // Porcentagem geral do envio (0 a 100)
+  const [sendProgress, setSendProgress] = useState(0);
+
+  // Indica se o envio de todas as fichas foi concluído
+  const [sendComplete, setSendComplete] = useState(false);
+
+  // Resumo final: quantas fichas foram enviadas com sucesso / com erro
+  const [sendSummary, setSendSummary] = useState({ success: 0, errors: 0 });
+
+  // ============================================================================
+  // CONSTANTES
+  // ============================================================================
+
+  // URL do script Google Apps Script que recebe os dados da ficha
+  // >>> EDITE ESTA URL SE MUDAR O SCRIPT DO GOOGLE <<<
   const WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbxLlUKIeUnaLW2VeWOpIG5ZtrrAFy_Qg9YQTq5fG4HrMUg7kt196zcFAt4jOjBrMsEE/exec";
 
-  const [meta, setMeta] = useState({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' });
+  // ============================================================================
+  // INICIALIZAÇÃO (carrega a biblioteca PDF.js do CDN)
+  // ============================================================================
 
   useEffect(() => {
-    document.body.style.display = 'block'; document.body.style.margin = '0'; document.documentElement.style.backgroundColor = '#f8fafc';
-    const rootNode = document.getElementById('root'); if (rootNode) rootNode.style.width = '100%';
+    document.body.style.display = 'block';
+    document.body.style.margin = '0';
+    document.documentElement.style.backgroundColor = '#f8fafc';
+    const rootNode = document.getElementById('root');
+    if (rootNode) rootNode.style.width = '100%';
+
+    // Carrega a biblioteca PDF.js para extrair texto dos PDFs
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js';
-    script.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js'; };
+    script.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+    };
     document.body.appendChild(script);
   }, []);
 
-  const updateMeta = (field: string, value: string) => {
-    if (field === 'aluno1p' || field === 'instrutor') value = value.toUpperCase().slice(0, 3);
-    setMeta(prev => { const newMeta = { ...prev, [field]: value }; if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) newMeta.grauMissao = ''; return newMeta; });
+  // ============================================================================
+  // ATALHO: A FICHA (ABA) ATIVA
+  // ============================================================================
+
+  // Retorna a ficha atualmente visível, ou null se não houver nenhuma carregada
+  const activeTab = tabs.length > 0 ? tabs[activeTabIndex] : null;
+
+  // ============================================================================
+  // PROCESSAMENTO DE UM ÚNICO ARQUIVO PDF
+  // ============================================================================
+
+  // Extrai tokens, metadados, itens e comentários de um arquivo PDF.
+  // Retorna um objeto FichaTab pronto para exibição, ou null se a extração falhar.
+  const processFile = async (file: File): Promise<FichaTab | null> => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    // Extrai todos os tokens de texto de todas as páginas do PDF
+    const allTokens: PdfToken[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      for (const it of textContent.items) {
+        const text = it.str;
+        if (text === undefined || text === null) continue;
+        allTokens.push({
+          text, x: it.transform[4], y: it.transform[5],
+          w: it.width || 0, page: i
+        });
+      }
+    }
+
+    // --- EXTRAÇÃO PRINCIPAL (usa as mesmas funções de sempre) ---
+    const metadata = extractMetadata(allTokens);
+    const parecer = extractParecer(allTokens);
+    const evalItems = extractEvaluationItems(allTokens);
+    const affItems = extractAffectiveItems(allTokens);
+    const comments = extractComments(allTokens);
+
+    // Associa comentários aos itens de avaliação (match direto por número)
+    for (const item of evalItems) {
+      const comment = comments.get(item.numero);
+      if (comment) item.comentario = comment;
+    }
+
+    // Associa comentários aos itens afetivos (match por nome no cabeçalho)
+    const normalize = (s: string) =>
+      s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+    // Re-extrai comentários brutos (sem limpeza de cabeçalho) para fazer match afetivo
+    const rawComments = new Map<string, string>();
+    {
+      let curNum = '';
+      let curTxt = '';
+      const commentsSections2 = allTokens.filter((t: PdfToken) =>
+        /^Coment[áa]rios:$/i.test(t.text.trim()));
+      const parecerBoundaries2 = allTokens.filter((t: PdfToken) =>
+        /Recomenda[çc][õo]es\/Parecer/i.test(t.text));
+
+      const allCommentTokens = allTokens.filter((t: PdfToken) => {
+        const txt = t.text.trim();
+        if (txt.length === 0) return false;
+        if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente|Prossegue)/i.test(txt)) return false;
+        if (/^[A-Z]{2,}.*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad|Cmte)\b/i.test(txt)) return false;
+        if (/[-–—]\s*(Maj|Cap|Ten|Cel|Cad|Cmte)\s+(QOAV|CFOAV)/i.test(txt)) return false;
+        if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
+        const parecerOnPage = parecerBoundaries2.find((p: PdfToken) => p.page === t.page);
+        if (parecerOnPage && t.y <= parecerOnPage.y) return false;
+        const pageCS = commentsSections2.find((cs: PdfToken) => cs.page === t.page);
+        if (pageCS && t.y < pageCS.y && t.y > 50) return true;
+        if (!pageCS && t.page > 1 && t.y > 50 && t.y < 760) {
+          if (commentsSections2.some((cs: PdfToken) => cs.page < t.page)) return true;
+        }
+        return false;
+      }).sort((a: PdfToken, b: PdfToken) => {
+        if (a.page !== b.page) return a.page - b.page;
+        if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
+        return a.x - b.x;
+      });
+
+      for (const token of allCommentTokens) {
+        const txt = token.text.trim();
+        if (!txt) continue;
+        const m = txt.match(/^(\d{1,3})\s*[-–—]/);
+        if (m) {
+          if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+          curNum = m[1];
+          curTxt = txt.replace(/^\d{1,3}\s*[-–—]\s*/, '').trim();
+        } else if (/^\d{1,3}$/.test(txt) && token.x < 50) {
+          if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+          curNum = txt;
+          curTxt = '';
+        } else if (curNum) {
+          curTxt += (curTxt ? ' ' : '') + txt;
+        }
+      }
+      if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
+    }
+
+    // Associa comentários brutos aos itens afetivos pelo nome no cabeçalho
+    for (const [commentNum, rawText] of rawComments.entries()) {
+      // Pula se já foi associado a um item de avaliação normal
+      if (evalItems.some(i => i.numero === commentNum)) continue;
+      const headerMatch = rawText.match(/^([^(/]+)/);
+      if (!headerMatch) continue;
+      const commentItemName = normalize(headerMatch[1]);
+      const matchedAff = affItems.find(aff => {
+        const affName = normalize(aff.nome);
+        return commentItemName.includes(affName.substring(0, 8)) ||
+               affName.includes(commentItemName.substring(0, 8));
+      });
+      if (matchedAff) {
+        const cleaned = rawText
+          .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')
+          .replace(/^[-–—]\s*/, '')
+          .replace(/\s+\d+\s+de\s+\d+\s*$/i, '')
+          .trim();
+        if (cleaned.length > 0) matchedAff.comentario = cleaned;
+      }
+    }
+
+    // Combina todos os itens, ordena por número e calcula confiança
+    const allItems = [...evalItems, ...affItems];
+    allItems.sort((a, b) => (parseInt(a.numero) || 999) - (parseInt(b.numero) || 999));
+    allItems.forEach(item => { item.confidence = computeConfidence(item); });
+
+    // Se nenhum item foi extraído, o PDF provavelmente não é válido
+    if (allItems.length === 0) return null;
+
+    // Retorna a ficha pronta para exibição
+    return {
+      id: crypto.randomUUID(),
+      fileName: file.name,
+      meta: { ...INITIAL_META, ...metadata, parecer: parecer || '' },
+      items: allItems,
+      pdfDocument: pdf,
+      rawPdfTokens: allTokens.filter(t => t.page === 1),
+    };
   };
 
+  // ============================================================================
+  // UPLOAD DE MÚLTIPLOS PDFs (seleção de vários arquivos de uma vez)
+  // ============================================================================
+
   const handleFileUpload = async (e: any) => {
-    const file = e.target.files[0];
-    if (!file) return; e.target.value = ''; setStatus('loading'); setErrorMsg(''); setDebugMode(false);
-    if (file.type !== 'application/pdf') { setErrorMsg('Formato inválido. Selecione um documento PDF.'); setStatus('idle'); return; }
-    if (!window.pdfjsLib) { setErrorMsg('Módulo de leitura indisponível. Recarregue a página.'); setStatus('idle'); return; }
+    const files = Array.from(e.target.files) as File[];
+    if (!files.length) return;
+    e.target.value = ''; // Permite re-selecionar os mesmos arquivos depois
 
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      setPdfDocument(pdf);
-      
-      const allTokens: PdfToken[] = [];
+    // Verifica se todos os arquivos selecionados são PDF
+    const invalidFile = files.find(f => f.type !== 'application/pdf');
+    if (invalidFile) {
+      setErrorMsg(`Arquivo "${invalidFile.name}" não é PDF. Selecione apenas documentos PDF.`);
+      return;
+    }
 
-      for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        
-        for (const it of textContent.items) {
-          const text = it.str;
-          if (text === undefined || text === null) continue;
-          allTokens.push({
-            text: text,
-            x: it.transform[4],
-            y: it.transform[5],
-            w: it.width || 0,
-            page: i
-          });
+    // Verifica se a biblioteca PDF.js está carregada
+    if (!window.pdfjsLib) {
+      setErrorMsg('Módulo de leitura indisponível. Recarregue a página.');
+      return;
+    }
+
+    setStatus('loading');
+    setErrorMsg('');
+    setDebugMode(false);
+    setLoadingProgress({ current: 0, total: files.length });
+
+    const newTabs: FichaTab[] = [];
+    const errors: string[] = [];
+
+    // Processa cada arquivo PDF individualmente
+    for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+      // Atualiza o indicador de progresso ("Processando 3 de 5...")
+      setLoadingProgress({ current: fileIdx + 1, total: files.length });
+
+      try {
+        const result = await processFile(files[fileIdx]);
+        if (result) {
+          newTabs.push(result);
+        } else {
+          errors.push(files[fileIdx].name);
         }
+      } catch (err) {
+        console.error(`Erro ao processar ${files[fileIdx].name}:`, err);
+        errors.push(files[fileIdx].name);
       }
+    }
 
-      // Debug: salva tokens da página 1 para visualização
-      setRawPdfTokens(allTokens.filter(t => t.page === 1));
-
-      // --- EXTRAÇÃO PRINCIPAL ---
-      
-      // 1. Metadados do cabeçalho
-      const metadata = extractMetadata(allTokens);
-      
-      // 2. Parecer
-      const parecer = extractParecer(allTokens);
-      
-      // 3. Itens de avaliação (tabela duas colunas)
-      const evalItems = extractEvaluationItems(allTokens);
-      
-      // 4. Itens afetivos-cognitivos
-      const affItems = extractAffectiveItems(allTokens);
-      
-      // 5. Comentários
-      const comments = extractComments(allTokens);
-      
-      // 6. Associa comentários aos itens de avaliação (por número direto)
-      for (const item of evalItems) {
-        const comment = comments.get(item.numero);
-        if (comment) {
-          item.comentario = comment;
-        }
-      }
-
-      // 7. Associa comentários aos itens afetivos (por nome no cabeçalho do comentário)
-      // No PDF, comentários de itens afetivos usam numeração diferente (ex: 41, 51)
-      // e o cabeçalho original contém o nome do item: "Aplicação de NPA (/DESTACOU-SE):"
-      // Precisamos fazer o match pelo nome do item afetivo
-      const normalize = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-      
-      // Guarda os cabeçalhos originais antes da limpeza para fazer o match
-      // Re-extraímos os comentários sem a limpeza de header para obter o texto original
-      const rawComments = new Map<string, string>();
-      {
-        let curNum = '';
-        let curTxt = '';
-        const commentsSections2 = allTokens.filter((t: PdfToken) => /^Coment[áa]rios:$/i.test(t.text.trim()));
-        const parecerBoundaries2 = allTokens.filter((t: PdfToken) => /Recomenda[çc][õo]es\/Parecer/i.test(t.text));
-        const allCommentTokens = allTokens.filter((t: PdfToken) => {
-          const txt = t.text.trim();
-          if (txt.length === 0) return false;
-          if (/^(Ass\. Digital|MATERIAL DE ACESSO|Art\. 44|Recomenda|INSTRUTOR do voo|Autoridade Competente|\d+ de \d+|Ciente|Prossegue)/i.test(txt)) return false;
-          if (/^[A-Z]{2,}.*[-–—]\s*(Maj|Cap|Ten|1.*Ten|2.*Ten|Cel|Cad|Cmte)\b/i.test(txt)) return false;
-          if (/[-–—]\s*(Maj|Cap|Ten|Cel|Cad|Cmte)\s+(QOAV|CFOAV)/i.test(txt)) return false;
-          if (/\bem \d{2}\/\d{2}\/\d{2}/.test(txt)) return false;
-          const parecerOnPage = parecerBoundaries2.find((p: PdfToken) => p.page === t.page);
-          if (parecerOnPage && t.y <= parecerOnPage.y) return false;
-          const pageCS = commentsSections2.find((cs: PdfToken) => cs.page === t.page);
-          if (pageCS && t.y < pageCS.y && t.y > 50) return true;
-          if (!pageCS && t.page > 1 && t.y > 50 && t.y < 760) {
-            if (commentsSections2.some((cs: PdfToken) => cs.page < t.page)) {
-              return true;
-            }
-          }
-          return false;
-        }).sort((a: PdfToken, b: PdfToken) => {
-          if (a.page !== b.page) return a.page - b.page;
-          if (Math.abs(a.y - b.y) > 5) return b.y - a.y;
-          return a.x - b.x;
-        });
-
-        for (const token of allCommentTokens) {
-          const txt = token.text.trim();
-          if (!txt) continue;
-          const m = txt.match(/^(\d{1,3})\s*[-–—]/);
-          if (m) {
-            if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
-            curNum = m[1];
-            curTxt = txt.replace(/^\d{1,3}\s*[-–—]\s*/, '').trim();
-          } else if (/^\d{1,3}$/.test(txt) && token.x < 50) {
-            if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
-            curNum = txt;
-            curTxt = '';
-          } else if (curNum) {
-            curTxt += (curTxt ? ' ' : '') + txt;
-          }
-        }
-        if (curNum && curTxt.trim()) rawComments.set(curNum, curTxt.trim());
-      }
-
-      // Agora itera sobre os rawComments para associar aos itens afetivos pelo nome
-      for (const [commentNum, rawText] of rawComments.entries()) {
-        // Se já foi associado a um evalItem, pular
-        if (evalItems.some(i => i.numero === commentNum)) continue;
-
-        // Extrai o nome do cabeçalho: "Aplicação de NPA (/DESTACOU-SE):" → "Aplicação de NPA"
-        const headerMatch = rawText.match(/^([^(/]+)/);
-        if (!headerMatch) continue;
-        const commentItemName = normalize(headerMatch[1]);
-
-        // Busca o item afetivo correspondente pelo nome
-        const matchedAff = affItems.find(aff => {
-          const affName = normalize(aff.nome);
-          // Match se o nome do comentário contém o início do nome do item afetivo
-          return commentItemName.includes(affName.substring(0, 8)) || affName.includes(commentItemName.substring(0, 8));
-        });
-
-        if (matchedAff) {
-          // Limpa o cabeçalho e atribui o comentário
-          const cleaned = rawText
-            .replace(/^[^(]*\([^)]*\)\s*:\s*/i, '')
-            .replace(/^[-–—]\s*/, '')
-            .replace(/\s+\d+\s+de\s+\d+\s*$/i, '')  // Remove índice de página residual
-            .trim();
-          if (cleaned.length > 0) {
-            matchedAff.comentario = cleaned;
-          }
-        }
-      }
-      
-      // Combina todos os itens
-      const allItems = [...evalItems, ...affItems];
-      
-      // Ordena por número
-      allItems.sort((a, b) => {
-        const numA = parseInt(a.numero) || 999;
-        const numB = parseInt(b.numero) || 999;
-        return numA - numB;
+    // Adiciona as novas abas ao array existente
+    // (permite clicar "Adicionar" para carregar mais fichas depois)
+    if (newTabs.length > 0) {
+      setTabs(prev => {
+        const allTabs = [...prev, ...newTabs];
+        // Se não havia abas antes, seleciona a primeira nova
+        if (prev.length === 0) setActiveTabIndex(0);
+        return allTabs;
       });
+      setStatus('reviewing');
+    }
 
-      // Calcula confiança
-      allItems.forEach(item => {
-        item.confidence = computeConfidence(item);
-      });
-
-      // Atualiza metadados
-      setMeta(prev => ({
-        ...prev,
-        ...metadata,
-        parecer: parecer || prev.parecer,
-      }));
-
-      if (allItems.length > 0) {
-        setItems(allItems);
-        setStatus('reviewing');
-        setErrorMsg('');
-      } else {
-        setErrorMsg('Falha na extração. Verifique a legibilidade do arquivo.');
-        setStatus('idle');
-      }
-    } catch (err) {
-      console.error('Erro ao processar PDF:', err);
-      setErrorMsg('Falha no processamento. Documento corrompido ou inacessível.');
-      setStatus('idle');
+    // Se algum arquivo falhou na extração, exibe aviso
+    if (errors.length > 0) {
+      setErrorMsg(`Falha na extração de: ${errors.join(', ')}`);
+      if (newTabs.length === 0 && tabs.length === 0) setStatus('idle');
     }
   };
 
-  const updateItem = (id: string, field: string, value: string) => setItems(items.map((item: any) => item.id === id ? { ...item, [field]: value } : item));
-  const removeItem = (id: string) => setItems(items.filter((item: any) => item.id !== id));
-  const addNewItem = () => setItems([...items, { id: crypto.randomUUID(), numero: '', nome: 'Registro Manual', fase: '--', grau: '', comentario: '', confidence: 1.0 }]);
+  // ============================================================================
+  // MANIPULAÇÃO DE METADADOS E ITENS (sempre da aba ativa)
+  // ============================================================================
 
-  const buildPayload = () => items.map((item: any) => ({ data: meta.data, esquadrilha: meta.esquadrilha, missao: meta.missao, grauMissao: (meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra') ? '' : meta.grauMissao, aluno1p: meta.aluno1p, instrutor: meta.instrutor, faseMissao: meta.fase, aeronave: meta.aeronave, hdep: meta.hdep, pousos: meta.pousos, tev: meta.tev, parecer: meta.parecer, numero: item.numero, nome: item.nome, faseItem: item.fase, grau: item.grau, comentario: item.comentario, tipoMissao: meta.tipoMissao }));
+  // Atualiza um campo dos metadados da aba ativa
+  const updateMeta = (field: string, value: string) => {
+    // Trigramas são sempre maiúsculos e limitados a 3 caracteres
+    if (field === 'aluno1p' || field === 'instrutor') {
+      value = value.toUpperCase().slice(0, 3);
+    }
 
+    setTabs(prev => prev.map((tab, i) => {
+      if (i !== activeTabIndex) return tab;
+      const newMeta = { ...tab.meta, [field]: value };
+      // Missões Abortivas ou Extras não possuem grau de missão
+      if (field === 'tipoMissao' && (value === 'Abortiva' || value === 'Extra')) {
+        newMeta.grauMissao = '';
+      }
+      return { ...tab, meta: newMeta };
+    }));
+  };
+
+  // Atualiza um campo de um item de avaliação na aba ativa
+  const updateItem = (id: string, field: string, value: string) => {
+    setTabs(prev => prev.map((tab, i) => {
+      if (i !== activeTabIndex) return tab;
+      return { ...tab, items: tab.items.map(
+        (item: any) => item.id === id ? { ...item, [field]: value } : item
+      )};
+    }));
+  };
+
+  // Remove um item de avaliação da aba ativa
+  const removeItem = (id: string) => {
+    setTabs(prev => prev.map((tab, i) => {
+      if (i !== activeTabIndex) return tab;
+      return { ...tab, items: tab.items.filter((item: any) => item.id !== id) };
+    }));
+  };
+
+  // Adiciona um item manual (em branco) na aba ativa
+  const addNewItem = () => {
+    setTabs(prev => prev.map((tab, i) => {
+      if (i !== activeTabIndex) return tab;
+      return { ...tab, items: [...tab.items, {
+        id: crypto.randomUUID(), numero: '', nome: 'Registro Manual',
+        fase: '--', grau: '', comentario: '', confidence: 1.0
+      }]};
+    }));
+  };
+
+  // ============================================================================
+  // GERENCIAMENTO DE ABAS (fechar, navegar)
+  // ============================================================================
+
+  // Fecha (remove) uma aba específica
+  const closeTab = (indexToClose: number) => {
+    const newTabs = tabs.filter((_, i) => i !== indexToClose);
+
+    if (newTabs.length === 0) {
+      // Sem fichas restantes — volta ao estado inicial (tela de upload)
+      setTabs([]);
+      setStatus('idle');
+      setActiveTabIndex(0);
+      setDebugMode(false);
+      setErrorMsg('');
+    } else {
+      setTabs(newTabs);
+      // Ajusta o índice da aba ativa para não sair do range
+      if (activeTabIndex >= newTabs.length) {
+        setActiveTabIndex(newTabs.length - 1);
+      } else if (activeTabIndex > indexToClose) {
+        setActiveTabIndex(activeTabIndex - 1);
+      }
+      // Se activeTabIndex === indexToClose, a próxima aba assume a mesma posição
+    }
+  };
+
+  // ============================================================================
+  // CONSTRUÇÃO DO PAYLOAD E EXPORTAÇÃO CSV
+  // ============================================================================
+
+  // Constrói o payload de envio para UMA ficha específica
+  // (um array de objetos, um por item de avaliação)
+  const buildPayloadForTab = (tab: FichaTab) => {
+    return tab.items.map((item: any) => ({
+      data: tab.meta.data,
+      esquadrilha: tab.meta.esquadrilha,
+      missao: tab.meta.missao,
+      grauMissao: (tab.meta.tipoMissao === 'Abortiva' || tab.meta.tipoMissao === 'Extra')
+        ? '' : tab.meta.grauMissao,
+      aluno1p: tab.meta.aluno1p,
+      instrutor: tab.meta.instrutor,
+      faseMissao: tab.meta.fase,
+      aeronave: tab.meta.aeronave,
+      hdep: tab.meta.hdep,
+      pousos: tab.meta.pousos,
+      tev: tab.meta.tev,
+      parecer: tab.meta.parecer,
+      numero: item.numero,
+      nome: item.nome,
+      faseItem: item.fase,
+      grau: item.grau,
+      comentario: item.comentario,
+      tipoMissao: tab.meta.tipoMissao,
+    }));
+  };
+
+  // Exporta CSV de TODAS as fichas (todas as abas) em um único arquivo
   const exportCSV = () => {
-    const hdrs = ['Data', 'Esquadrilha', 'Missão', 'Grau Missão', '1P / AL', 'IN', 'Fase Missão', 'Anv', 'H.Dep', 'Pousos', 'TEV', 'Parecer', 'Nº Item', 'Nome', 'Fase Item', 'Grau/Menção', 'Comentário', 'Tipo'];
-    const csvContent = [ hdrs.join(','), ...buildPayload().map(r => `"${r.data}","${r.esquadrilha}","${r.missao}","${r.grauMissao}","${r.aluno1p}","${r.instrutor}","${r.faseMissao}","${r.aeronave}","${r.hdep}","${r.pousos}","${r.tev}","${(r.parecer || '').replace(/\"/g, '""')}","${r.numero}","${r.nome}","${r.faseItem}","${r.grau}","${(r.comentario || '').replace(/\"/g, '""')}","${r.tipoMissao}"`) ].join('\n');
+    const hdrs = ['Data', 'Esquadrilha', 'Missão', 'Grau Missão', '1P / AL', 'IN',
+      'Fase Missão', 'Anv', 'H.Dep', 'Pousos', 'TEV', 'Parecer',
+      'Nº Item', 'Nome', 'Fase Item', 'Grau/Menção', 'Comentário', 'Tipo'];
+
+    // Coleta dados de TODAS as fichas de todas as abas
+    const allPayloads = tabs.flatMap(tab => buildPayloadForTab(tab));
+
+    const csvContent = [
+      hdrs.join(','),
+      ...allPayloads.map(r =>
+        `"${r.data}","${r.esquadrilha}","${r.missao}","${r.grauMissao}",` +
+        `"${r.aluno1p}","${r.instrutor}","${r.faseMissao}","${r.aeronave}",` +
+        `"${r.hdep}","${r.pousos}","${r.tev}",` +
+        `"${(r.parecer || '').replace(/"/g, '""')}",` +
+        `"${r.numero}","${r.nome}","${r.faseItem}","${r.grau}",` +
+        `"${(r.comentario || '').replace(/"/g, '""')}","${r.tipoMissao}"`
+      )
+    ].join('\n');
+
     const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const lnk = document.createElement('a'); lnk.href = URL.createObjectURL(blob); lnk.setAttribute('download', `Ficha_${meta.missao || 'Extracao'}_${new Date().toISOString().slice(0,10)}.csv`); lnk.click();
+    const lnk = document.createElement('a');
+    lnk.href = URL.createObjectURL(blob);
+    lnk.setAttribute('download', `Fichas_${tabs.length}_${new Date().toISOString().slice(0, 10)}.csv`);
+    lnk.click();
   };
 
-  const sendWebhook = async () => {
-    if (!meta.esquadrilha) { setErrorMsg('Obrigatório informar a Esquadrilha.'); window.scrollTo(0, 0); return; }
-    if (!meta.aluno1p || !meta.instrutor) { setErrorMsg('Obrigatório informar trigramas de Aluno e Instrutor.'); window.scrollTo(0, 0); return; }
-    setModalState('sending'); setShowModal(true);
-    try {
-      const res = await fetch(WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(buildPayload()) });
-      if (res.ok) { setModalState('success'); setModalMessage('Integração concluída com sucesso.'); } 
-      else throw new Error('A requisição falhou.');
-    } catch { setModalState('error'); setModalMessage('Erro de conexão. A exportação manual em CSV continua disponível.'); }
+  // ============================================================================
+  // VALIDAÇÃO DE CAMPOS OBRIGATÓRIOS (antes do envio)
+  // ============================================================================
+
+  // Percorre TODAS as fichas e encontra a primeira com campos obrigatórios faltando.
+  // Campos obrigatórios: Esquadrilha, Aluno (1P), Instrutor (IN).
+  // Retorna null se todas estão válidas.
+  // >>> EDITE AQUI SE QUISER ADICIONAR MAIS CAMPOS OBRIGATÓRIOS <<<
+  const findFirstInvalidTab = (): { index: number; message: string } | null => {
+    for (let i = 0; i < tabs.length; i++) {
+      const tab = tabs[i];
+      if (!tab.meta.esquadrilha) {
+        return { index: i, message: `"${tab.fileName}" — Esquadrilha não informada.` };
+      }
+      if (!tab.meta.aluno1p) {
+        return { index: i, message: `"${tab.fileName}" — Trigrama do Aluno (1P) não informado.` };
+      }
+      if (!tab.meta.instrutor) {
+        return { index: i, message: `"${tab.fileName}" — Trigrama do Instrutor (IN) não informado.` };
+      }
+    }
+    return null; // Tudo OK
   };
 
-  const resetAfterSuccess = () => { setShowModal(false); if (modalState === 'success') { setStatus('idle'); setItems([]); setPdfDocument(null); setMeta({ esquadrilha: '', aluno1p: '', instrutor: '', fase: '', aeronave: '', data: '', missao: '', grauMissao: '', tipoMissao: 'Normal', pousos: '', hdep: '', tev: '', parecer: '' }); } };
+  // ============================================================================
+  // FLUXO DE ENVIO: Validação → Confirmação → Progresso → Concluído
+  // ============================================================================
+
+  // Passo 1: Chamado ao clicar "Salvar Registros"
+  // Valida os campos e, se tudo OK, mostra popup de confirmação
+  const handleSendClick = () => {
+    setErrorMsg('');
+
+    // Verifica se todos os campos obrigatórios estão preenchidos
+    const invalid = findFirstInvalidTab();
+    if (invalid) {
+      // Salta para a aba com problema e exibe mensagem de erro
+      setActiveTabIndex(invalid.index);
+      setErrorMsg(invalid.message);
+      window.scrollTo(0, 0);
+      return;
+    }
+
+    // Todas as fichas estão válidas — mostra popup "Todas as fichas verificadas?"
+    setShowConfirmDialog(true);
+  };
+
+  // Passo 2: Chamado ao confirmar no popup
+  // Envia TODAS as fichas sequencialmente para o Google Sheets
+  // (Sequencial para evitar conflito com o LockService do Google Apps Script)
+  const sendAllFichas = async () => {
+    setShowConfirmDialog(false);
+    setShowProgressDialog(true);
+    setSendComplete(false);
+    setSendProgress(0);
+
+    // Inicializa o status de cada ficha como "aguardando"
+    const initialStatuses: SendStatus[] = tabs.map(tab => ({
+      fileName: tab.fileName,
+      status: 'waiting' as const,
+    }));
+    setSendStatuses(initialStatuses);
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    // Envia uma ficha por vez (sequencial)
+    for (let i = 0; i < tabs.length; i++) {
+      // Marca a ficha atual como "enviando"
+      setSendStatuses(prev => prev.map((s, idx) =>
+        idx === i ? { ...s, status: 'sending' } : s
+      ));
+
+      try {
+        const payload = buildPayloadForTab(tabs[i]);
+        const res = await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          // Sucesso: marca como enviado
+          successCount++;
+          setSendStatuses(prev => prev.map((s, idx) =>
+            idx === i ? { ...s, status: 'success', message: 'Enviado com sucesso' } : s
+          ));
+        } else {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch (err: any) {
+        // Erro: marca como falha
+        errorCount++;
+        setSendStatuses(prev => prev.map((s, idx) =>
+          idx === i ? { ...s, status: 'error', message: err.message || 'Erro desconhecido' } : s
+        ));
+      }
+
+      // Atualiza a barra de progresso (porcentagem)
+      setSendProgress(Math.round(((i + 1) / tabs.length) * 100));
+    }
+
+    // Envio concluído — salva o resumo final
+    setSendSummary({ success: successCount, errors: errorCount });
+    setSendComplete(true);
+  };
+
+  // Passo 3: Limpa tudo após o envio e volta à tela inicial
+  const resetAfterSuccess = () => {
+    setShowProgressDialog(false);
+    setSendComplete(false);
+    setSendProgress(0);
+    setSendStatuses([]);
+    setTabs([]);
+    setActiveTabIndex(0);
+    setStatus('idle');
+    setDebugMode(false);
+    setErrorMsg('');
+  };
+
+  // ============================================================================
+  // RENDERIZAÇÃO (JSX)
+  // ============================================================================
 
   return (
     <div className="min-h-screen w-full bg-slate-50 text-slate-800 font-sans p-4 md:p-8 relative">
-      {showModal && (
+
+      {/* ================================================================== */}
+      {/* POPUP DE CONFIRMAÇÃO: "Todas as fichas verificadas?"               */}
+      {/* Aparece quando o usuário clica "Salvar Registros" e tudo está OK   */}
+      {/* ================================================================== */}
+      {showConfirmDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full text-center flex flex-col items-center">
-            {modalState === 'sending' && (<><RefreshCw size={44} className="animate-spin text-blue-600 mb-6" /><h2 className="text-2xl font-bold mb-1">Processando</h2><p className="text-slate-500 mb-3">Sincronizando com a base de dados...</p></>)}
-            {modalState === 'success' && (<><CheckCircle2 size={52} className="text-green-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Finalizado</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={resetAfterSuccess} className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg">Nova Extração</button></>)}
-            {modalState === 'error' && (<><XCircle size={52} className="text-red-500 mb-6" /><h2 className="text-2xl font-bold mb-1">Aviso</h2><p className="text-slate-500 mb-8">{modalMessage}</p><button onClick={() => setShowModal(false)} className="w-full bg-slate-100 text-slate-800 font-bold py-3 px-6 rounded-xl">Reconectar</button></>)}
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full text-center">
+            {/* Ícone decorativo */}
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <FileText size={32} className="text-blue-600" />
+            </div>
+
+            <h2 className="text-2xl font-bold mb-2">Todas as fichas verificadas?</h2>
+            <p className="text-slate-500 mb-8">
+              {tabs.length} ficha{tabs.length > 1 ? 's' : ''} será{tabs.length > 1 ? 'ão' : ''} enviada{tabs.length > 1 ? 's' : ''} para a base de dados.
+            </p>
+
+            {/* Botões: Cancelar / Confirmar e Enviar */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowConfirmDialog(false)}
+                className="flex-1 px-6 py-3.5 border border-slate-200 rounded-xl font-semibold text-slate-700 hover:bg-slate-50 transition"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={sendAllFichas}
+                className="flex-1 px-6 py-3.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition active:scale-95"
+              >
+                Confirmar e Enviar
+              </button>
+            </div>
           </div>
         </div>
       )}
-      
-      <div className={`max-w-7xl mx-auto transition-opacity ${showModal ? 'opacity-25' : 'opacity-100'}`}>
+
+      {/* ================================================================== */}
+      {/* POPUP DE PROGRESSO DO ENVIO                                        */}
+      {/* Mostra barra de progresso, porcentagem e tasklist de cada ficha    */}
+      {/* Quando finaliza, mostra "✅ Concluído"                            */}
+      {/* ================================================================== */}
+      {showProgressDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm px-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full">
+
+            {sendComplete ? (
+              /* ---------- ENVIO CONCLUÍDO ---------- */
+              <>
+                <div className="text-center mb-6">
+                  {/* Ícone de conclusão: ✅ se tudo OK, ⚠️ se houve erros */}
+                  <div className="text-5xl mb-4">{sendSummary.errors === 0 ? '✅' : '⚠️'}</div>
+                  <h2 className="text-2xl font-bold">
+                    {sendSummary.errors === 0 ? 'Concluído' : 'Concluído com Erros'}
+                  </h2>
+                  <p className="text-slate-500 mt-2">
+                    {sendSummary.errors === 0
+                      ? `${sendSummary.success} ficha${sendSummary.success > 1 ? 's' : ''} enviada${sendSummary.success > 1 ? 's' : ''} com sucesso.`
+                      : `${sendSummary.success} de ${tabs.length} fichas enviadas. ${sendSummary.errors} erro${sendSummary.errors > 1 ? 's' : ''}.`
+                    }
+                  </p>
+                </div>
+
+                {/* Lista de resultados por ficha */}
+                <div className="max-h-60 overflow-y-auto space-y-2 mb-6">
+                  {sendStatuses.map((s, i) => (
+                    <div key={i} className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm ${
+                      s.status === 'success' ? 'bg-green-50' : 'bg-red-50'
+                    }`}>
+                      {s.status === 'success'
+                        ? <CheckCircle2 size={18} className="text-green-500 shrink-0" />
+                        : <XCircle size={18} className="text-red-500 shrink-0" />
+                      }
+                      <span className="font-medium truncate flex-1">{s.fileName}</span>
+                      <span className="text-xs text-slate-400 shrink-0">
+                        {s.status === 'success' ? 'Enviado ✓' : (s.message || 'Erro')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Botão para iniciar nova extração (limpa tudo) */}
+                <button
+                  onClick={resetAfterSuccess}
+                  className="w-full bg-slate-800 text-white font-bold py-3.5 px-6 rounded-xl text-lg hover:bg-slate-900 transition"
+                >
+                  Nova Extração
+                </button>
+              </>
+            ) : (
+              /* ---------- ENVIO EM ANDAMENTO ---------- */
+              <>
+                <div className="text-center mb-6">
+                  <RefreshCw size={44} className="animate-spin text-blue-600 mx-auto mb-4" />
+                  <h2 className="text-2xl font-bold">Enviando Fichas</h2>
+                  <p className="text-slate-500 mt-1">Sincronizando com a base de dados...</p>
+                </div>
+
+                {/* Barra de progresso com porcentagem */}
+                <div className="mb-2 flex justify-between text-sm font-semibold text-slate-600">
+                  <span>
+                    {sendStatuses.filter(s => s.status === 'success' || s.status === 'error').length} de {tabs.length}
+                  </span>
+                  <span>{sendProgress}%</span>
+                </div>
+                <div className="w-full bg-slate-200 rounded-full h-3 mb-6 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-full rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${sendProgress}%` }}
+                  />
+                </div>
+
+                {/* Tasklist: status individual de cada ficha */}
+                <div className="max-h-60 overflow-y-auto space-y-2">
+                  {sendStatuses.map((s, i) => (
+                    <div key={i} className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm transition-colors ${
+                      s.status === 'success' ? 'bg-green-50' :
+                      s.status === 'sending' ? 'bg-blue-50' :
+                      s.status === 'error' ? 'bg-red-50' : 'bg-slate-50'
+                    }`}>
+                      {/* Ícone animado por status */}
+                      {s.status === 'waiting' && <span className="text-slate-400 shrink-0">⏳</span>}
+                      {s.status === 'sending' && <RefreshCw size={16} className="animate-spin text-blue-500 shrink-0" />}
+                      {s.status === 'success' && <CheckCircle2 size={16} className="text-green-500 shrink-0" />}
+                      {s.status === 'error' && <XCircle size={16} className="text-red-500 shrink-0" />}
+
+                      {/* Nome do arquivo */}
+                      <span className="font-medium truncate flex-1">{s.fileName}</span>
+
+                      {/* Texto de status */}
+                      <span className="text-xs text-slate-400 shrink-0">
+                        {s.status === 'waiting' && 'Aguardando...'}
+                        {s.status === 'sending' && 'Enviando...'}
+                        {s.status === 'success' && 'Enviado ✓'}
+                        {s.status === 'error' && (s.message || 'Erro')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================== */}
+      {/* CONTEÚDO PRINCIPAL DA PÁGINA                                       */}
+      {/* ================================================================== */}
+      <div className={`max-w-7xl mx-auto transition-opacity ${(showConfirmDialog || showProgressDialog) ? 'opacity-25' : 'opacity-100'}`}>
+
+        {/* ----- HEADER DO APP ----- */}
         <header className="mb-8 bg-white p-6 rounded-xl shadow-sm border flex items-center justify-between gap-5">
           <div className="flex items-center gap-5">
-            <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0"><FileText size={32} /></div>
-            <div><h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1><p className="text-slate-500 text-lg">Processamento de Fichas de Avaliação.</p></div>
+            <div className="w-14 h-14 bg-blue-600 rounded-lg flex items-center justify-center text-white shrink-0">
+              <FileText size={32} />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Análise Estruturada EIA</h1>
+              <p className="text-slate-500 text-lg">Processamento de Fichas de Avaliação.</p>
+            </div>
           </div>
+
+          {/* Botão de debug (só aparece no modo de revisão) */}
           {status === 'reviewing' && (
-            <button onClick={() => setDebugMode(!debugMode)} className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`} title="Módulo de Depuração Visual">
+            <button
+              onClick={() => setDebugMode(!debugMode)}
+              className={`p-3 rounded-full transition ${debugMode ? 'bg-red-100 text-red-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+              title="Módulo de Depuração Visual"
+            >
               <Bug size={24} />
             </button>
           )}
         </header>
 
-        {errorMsg && <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2"><AlertCircle className="text-red-500 shrink-0"/>{errorMsg}</div>}
-        
+        {/* ----- MENSAGEM DE ERRO (aparece no topo quando há campos faltando) ----- */}
+        {errorMsg && (
+          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 font-medium flex gap-2">
+            <AlertCircle className="text-red-500 shrink-0" />{errorMsg}
+          </div>
+        )}
+
+        {/* ===== TELA INICIAL — SELEÇÃO DE PDFs ===== */}
         {status === 'idle' && (
-          <div className="flex justify-center"><div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg"><Upload size={48} className="text-blue-600 mb-7" /><h2 className="text-2xl font-bold mb-4">Seleção de Documento</h2><p className="text-slate-500 mb-8 max-w-md">Importação de Fichas em formato PDF. A arquitetura detecta automaticamente a estrutura do documento.</p><label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition"><FileText size={26} /> Carregar PDF <input type="file" accept="application/pdf" className="hidden" onClick={(e: any) => e.target.value = ''} onChange={handleFileUpload} /></label></div></div>
+          <div className="flex justify-center">
+            <div className="bg-white p-16 rounded-2xl shadow-sm border flex flex-col items-center text-center w-full max-w-3xl border-slate-200 hover:border-blue-300 transition hover:shadow-lg">
+              <Upload size={48} className="text-blue-600 mb-7" />
+              <h2 className="text-2xl font-bold mb-4">Seleção de Documentos</h2>
+              <p className="text-slate-500 mb-8 max-w-md">
+                Selecione uma ou múltiplas fichas em formato PDF.
+                Cada ficha será processada e exibida em uma aba separada para revisão.
+              </p>
+              {/* Botão de upload — aceita múltiplos arquivos PDF */}
+              <label className="bg-blue-600 hover:bg-blue-700 text-white px-9 py-4.5 rounded-2xl text-xl font-bold cursor-pointer flex items-center gap-3.5 transition active:scale-95">
+                <FileText size={26} /> Carregar PDFs
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  multiple
+                  className="hidden"
+                  onClick={(e: any) => e.target.value = ''}
+                  onChange={handleFileUpload}
+                />
+              </label>
+            </div>
+          </div>
         )}
-        
+
+        {/* ===== TELA DE CARREGAMENTO (processando os PDFs) ===== */}
         {status === 'loading' && (
-          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center"><RefreshCw className="text-blue-600 animate-spin mb-5" size={44} /><h2 className="text-2xl font-bold">Extração em Andamento</h2><p className="text-slate-500 mt-2">Mapeamento vetorial e reconciliação de dados ativados...</p></div>
+          <div className="bg-white p-20 rounded-2xl shadow-sm border flex flex-col items-center text-center">
+            <RefreshCw className="text-blue-600 animate-spin mb-5" size={44} />
+            <h2 className="text-2xl font-bold">Extração em Andamento</h2>
+            <p className="text-slate-500 mt-2">
+              {loadingProgress.total > 1
+                ? `Processando ficha ${loadingProgress.current} de ${loadingProgress.total}...`
+                : 'Mapeamento vetorial e reconciliação de dados ativados...'
+              }
+            </p>
+            {/* Barra de progresso do carregamento (só aparece com 2+ arquivos) */}
+            {loadingProgress.total > 1 && (
+              <div className="w-full max-w-sm mt-6">
+                <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.round((loadingProgress.current / loadingProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         )}
-        
-        {status === 'reviewing' && (
-          <div className="space-y-6 relative z-10">
+
+        {/* ===== TELA DE REVISÃO — ABAS + CONTEÚDO DA FICHA ATIVA ===== */}
+        {status === 'reviewing' && activeTab && (
+          <div className="space-y-0">
+
+            {/* ---------------------------------------------------------- */}
+            {/* BARRA DE ABAS (TAB BAR)                                    */}
+            {/* Cada aba = um PDF carregado. Clique para navegar entre elas */}
+            {/* ---------------------------------------------------------- */}
+            <div className="flex items-center bg-white border border-slate-200 rounded-t-xl overflow-hidden">
+              {/* Container scrollável com as abas */}
+              <div className="flex-1 flex overflow-x-auto">
+                {tabs.map((tab, i) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => { setActiveTabIndex(i); setErrorMsg(''); }}
+                    className={`group flex items-center gap-2 px-5 py-3.5 text-sm font-semibold whitespace-nowrap border-b-2 transition-all shrink-0 ${
+                      i === activeTabIndex
+                        ? 'border-blue-600 bg-blue-50/60 text-blue-700'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <FileText size={14} className={i === activeTabIndex ? 'text-blue-500' : 'text-slate-400'} />
+                    {/* Nome do arquivo sem a extensão .pdf */}
+                    <span className="max-w-[180px] truncate">
+                      {tab.fileName.replace(/\.pdf$/i, '')}
+                    </span>
+                    {/* Botão X para fechar a aba (aparece ao passar o mouse) */}
+                    <span
+                      onClick={(e) => { e.stopPropagation(); closeTab(i); }}
+                      className="ml-1 p-0.5 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-100 hover:text-red-500 transition cursor-pointer"
+                    >
+                      <X size={14} />
+                    </span>
+                  </button>
+                ))}
+              </div>
+
+              {/* Botão "+" para adicionar mais fichas (abre o seletor de arquivos) */}
+              <label
+                className="px-4 py-3.5 border-l border-slate-200 cursor-pointer text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition flex items-center gap-1.5 text-sm font-semibold shrink-0"
+                title="Adicionar mais fichas"
+              >
+                <Plus size={16} />
+                <span className="hidden md:inline">Adicionar</span>
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  multiple
+                  className="hidden"
+                  onClick={(e: any) => e.target.value = ''}
+                  onChange={handleFileUpload}
+                />
+              </label>
+            </div>
+
+            {/* Indicador textual: "Ficha 2 de 5 • Ficha_MTA_PS-02.pdf" */}
+            <div className="bg-white border-x border-slate-200 px-5 py-2 text-xs text-slate-400 font-semibold uppercase tracking-wider">
+              Ficha {activeTabIndex + 1} de {tabs.length} • {activeTab.fileName}
+            </div>
+
+            {/* ----- VISUALIZADOR DEBUG (se ativado via botão no header) ----- */}
             {debugMode && (
-              <div className="mb-6">
-                <h3 className="text-lg font-bold mb-3 flex items-center gap-2"><Bug size={20}/> Visualização de OCR</h3>
-                <PdfViewer pdf={pdfDocument} tokens={rawPdfTokens} />
+              <div className="bg-white border-x border-slate-200 px-6 pt-4 pb-6">
+                <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+                  <Bug size={20} /> Visualização de OCR
+                </h3>
+                <PdfViewer pdf={activeTab.pdfDocument} tokens={activeTab.rawPdfTokens} />
               </div>
             )}
 
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-7">
-              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100"><FileText className="text-blue-500" size={22} /> Cabeçalho da Missão</h3>
+            {/* ---------------------------------------------------------- */}
+            {/* METADADOS DO CABEÇALHO (da aba/ficha ativa)                */}
+            {/* ---------------------------------------------------------- */}
+            <div className="bg-white border-x border-slate-200 p-7">
+              <h3 className="text-xl font-bold mb-5 flex items-center gap-2.5 border-b pb-4 border-slate-100">
+                <FileText className="text-blue-500" size={22} /> Cabeçalho da Missão
+              </h3>
+
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-5">
-                <MetaSelect label="Esquadrilha *" value={meta.esquadrilha} onChange={(e: any) => updateMeta('esquadrilha', e.target.value)} options={['Antares', 'Vega', 'Castor', 'Sirius']} />
-                <MetaInput label="1P / Aluno *" value={meta.aluno1p} onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
-                <MetaInput label="Instrutor (IN) *" value={meta.instrutor} onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="MOT" />
-                <MetaInput label="Missão" value={meta.missao} onChange={(e: any) => updateMeta('missao', e.target.value)} />
-                <MetaInput label="Grau Missão" value={meta.grauMissao} onChange={(e: any) => updateMeta('grauMissao', e.target.value)} disabled={meta.tipoMissao === 'Abortiva' || meta.tipoMissao === 'Extra'} />
-                <MetaSelect label="Tipo Missão" value={meta.tipoMissao} onChange={(e: any) => updateMeta('tipoMissao', e.target.value)} options={['Normal', 'Abortiva', 'Extra', 'Revisão']} />
-                <MetaInput label="Data" value={meta.data} onChange={(e: any) => updateMeta('data', e.target.value)} />
-                <MetaInput label="Fase" value={meta.fase} onChange={(e: any) => updateMeta('fase', e.target.value)} />
-                <MetaInput label="Aeronave" value={meta.aeronave} onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
-                <MetaInput label="H. Dep" value={meta.hdep} onChange={(e: any) => updateMeta('hdep', e.target.value)} />
-                <MetaInput label="Pousos" value={meta.pousos} onChange={(e: any) => updateMeta('pousos', e.target.value)} />
-                <MetaInput label="TEV" value={meta.tev} onChange={(e: any) => updateMeta('tev', e.target.value)} />
+                {/* >>> Campos com * são obrigatórios para o envio <<< */}
+                <MetaSelect label="Esquadrilha *" value={activeTab.meta.esquadrilha}
+                  onChange={(e: any) => updateMeta('esquadrilha', e.target.value)}
+                  options={['Antares', 'Vega', 'Castor', 'Sirius']} />
+                <MetaInput label="1P / Aluno *" value={activeTab.meta.aluno1p}
+                  onChange={(e: any) => updateMeta('aluno1p', e.target.value)} maxLength={3} placeholder="MTA" />
+                <MetaInput label="Instrutor (IN) *" value={activeTab.meta.instrutor}
+                  onChange={(e: any) => updateMeta('instrutor', e.target.value)} maxLength={3} placeholder="MOT" />
+                <MetaInput label="Missão" value={activeTab.meta.missao}
+                  onChange={(e: any) => updateMeta('missao', e.target.value)} />
+                <MetaInput label="Grau Missão" value={activeTab.meta.grauMissao}
+                  onChange={(e: any) => updateMeta('grauMissao', e.target.value)}
+                  disabled={activeTab.meta.tipoMissao === 'Abortiva' || activeTab.meta.tipoMissao === 'Extra'} />
+                <MetaSelect label="Tipo Missão" value={activeTab.meta.tipoMissao}
+                  onChange={(e: any) => updateMeta('tipoMissao', e.target.value)}
+                  options={['Normal', 'Abortiva', 'Extra', 'Revisão']} />
+                <MetaInput label="Data" value={activeTab.meta.data}
+                  onChange={(e: any) => updateMeta('data', e.target.value)} />
+                <MetaInput label="Fase" value={activeTab.meta.fase}
+                  onChange={(e: any) => updateMeta('fase', e.target.value)} />
+                <MetaInput label="Aeronave" value={activeTab.meta.aeronave}
+                  onChange={(e: any) => updateMeta('aeronave', e.target.value)} />
+                <MetaInput label="H. Dep" value={activeTab.meta.hdep}
+                  onChange={(e: any) => updateMeta('hdep', e.target.value)} />
+                <MetaInput label="Pousos" value={activeTab.meta.pousos}
+                  onChange={(e: any) => updateMeta('pousos', e.target.value)} />
+                <MetaInput label="TEV" value={activeTab.meta.tev}
+                  onChange={(e: any) => updateMeta('tev', e.target.value)} />
               </div>
-              <div className="mt-5 pt-5 border-t border-slate-100"><MetaTextarea label="Parecer do Comandante" value={meta.parecer} onChange={(e: any) => updateMeta('parecer', e.target.value)} placeholder="Registro de observações operacionais..." /></div>
+
+              {/* Parecer do Comandante (campo de texto livre) */}
+              <div className="mt-5 pt-5 border-t border-slate-100">
+                <MetaTextarea label="Parecer do Comandante" value={activeTab.meta.parecer}
+                  onChange={(e: any) => updateMeta('parecer', e.target.value)}
+                  placeholder="Registro de observações operacionais..." />
+              </div>
             </div>
-            
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+
+            {/* ---------------------------------------------------------- */}
+            {/* TABELA DE AVALIAÇÃO (itens da aba/ficha ativa)             */}
+            {/* ---------------------------------------------------------- */}
+            <div className="bg-white rounded-b-2xl shadow-sm border border-slate-200 border-t-0 overflow-hidden">
+              {/* Cabeçalho da tabela com botões de ação */}
               <div className="p-6 border-b flex flex-col lg:flex-row justify-between gap-4 bg-slate-50/50">
-                <h2 className="text-xl font-bold flex items-center gap-2.5"><Check className="text-green-500" size={26} /> Tabela de Avaliação ({items.length} itens)</h2>
+                <h2 className="text-xl font-bold flex items-center gap-2.5">
+                  <Check className="text-green-500" size={26} />
+                  Tabela de Avaliação ({activeTab.items.length} itens)
+                </h2>
                 <div className="flex flex-wrap gap-3">
-                  <button onClick={() => { setStatus('idle'); setItems([]); setRawPdfTokens([]); setPdfDocument(null); setDebugMode(false); }} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl">Descartar</button>
-                  <button onClick={exportCSV} className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"><Download size={18} /> Exportar CSV</button>
-                  <button onClick={sendWebhook} className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"><Zap size={22} /> Salvar Registros</button>
+                  {/* Descartar TODAS as fichas e voltar à tela inicial */}
+                  <button
+                    onClick={() => { setTabs([]); setStatus('idle'); setActiveTabIndex(0); setDebugMode(false); setErrorMsg(''); }}
+                    className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl"
+                  >
+                    Descartar Tudo
+                  </button>
+
+                  {/* Exportar CSV de TODAS as fichas (todas as abas) */}
+                  <button
+                    onClick={exportCSV}
+                    className="px-5 py-3 text-sm font-semibold border bg-white hover:bg-slate-50 rounded-xl flex items-center gap-2"
+                  >
+                    <Download size={18} /> Exportar CSV ({tabs.length})
+                  </button>
+
+                  {/* Enviar TODAS as fichas para o Google Sheets */}
+                  <button
+                    onClick={handleSendClick}
+                    className="px-9 py-3 text-lg text-white bg-blue-600 hover:bg-blue-700 rounded-xl font-bold flex items-center gap-2.5 transition active:scale-95"
+                  >
+                    <Zap size={22} /> Salvar Registros ({tabs.length})
+                  </button>
                 </div>
               </div>
+
+              {/* Corpo da tabela com os itens de avaliação */}
               <div className="p-7 overflow-x-auto">
                 <table className="w-full text-left border-collapse min-w-[950px] relative z-20">
-                  <thead><tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider"><th className="p-3 w-8 text-center" title="Acurácia da Extração">C.</th><th className="p-3 w-16">Item</th><th className="p-3">Manobra / Competência</th><th className="p-3 w-20 text-center">Fase</th><th className="p-3 w-24 text-center">Grau</th><th className="p-3">Observações Mapeadas</th><th className="p-3 w-12 text-center">Ações</th></tr></thead>
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase font-bold tracking-wider">
+                      <th className="p-3 w-8 text-center" title="Acurácia da Extração">C.</th>
+                      <th className="p-3 w-16">Item</th>
+                      <th className="p-3">Manobra / Competência</th>
+                      <th className="p-3 w-20 text-center">Fase</th>
+                      <th className="p-3 w-24 text-center">Grau</th>
+                      <th className="p-3">Observações Mapeadas</th>
+                      <th className="p-3 w-12 text-center">Ações</th>
+                    </tr>
+                  </thead>
                   <tbody className="text-sm">
-                    {items.map((it) => (
+                    {activeTab.items.map((it: any) => (
                       <tr key={it.id} className="border-b border-slate-100 hover:bg-slate-50/40 text-slate-800">
+                        {/* Indicador visual de confiança (verde/amarelo/vermelho) */}
                         <td className="p-3 text-center">
-                          <div className={`w-3 h-3 rounded-full mx-auto ${it.confidence > 0.6 ? 'bg-green-400' : (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')}`} title={`Acurácia calculada: ${Math.round(it.confidence * 100)}%`}></div>
+                          <div
+                            className={`w-3 h-3 rounded-full mx-auto ${
+                              it.confidence > 0.6 ? 'bg-green-400' :
+                              (it.confidence > 0.4 ? 'bg-yellow-400' : 'bg-red-500 animate-pulse')
+                            }`}
+                            title={`Acurácia calculada: ${Math.round(it.confidence * 100)}%`}
+                          />
                         </td>
-                        <td className="p-3 font-mono font-bold text-slate-400"><input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)} className="w-full bg-transparent px-1" placeholder="--" /></td>
-                        <td className="p-3 font-medium"><input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)} className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`} placeholder="Item de avaliação..." /></td>
-                        <td className="p-3 text-center font-bold text-blue-700"><input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)} className="w-full bg-transparent px-1 text-center" placeholder="--" /></td>
-                        <td className="p-3 text-center font-extrabold"><input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)} className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`} placeholder="--" /></td>
-                        <td className="p-3"><textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)} className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed" placeholder="Adicionar dados..." /></td>
-                        <td className="p-3 text-center"><button onClick={() => removeItem(it.id)} className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg"><Trash2 size={16} /></button></td>
+                        {/* Número do item */}
+                        <td className="p-3 font-mono font-bold text-slate-400">
+                          <input value={it.numero} onChange={(e) => updateItem(it.id, 'numero', e.target.value)}
+                            className="w-full bg-transparent px-1" placeholder="--" />
+                        </td>
+                        {/* Nome da manobra/competência */}
+                        <td className="p-3 font-medium">
+                          <input value={it.nome} onChange={(e) => updateItem(it.id, 'nome', e.target.value)}
+                            className={`w-full bg-transparent px-1 ${getGradeColorClass(it.grau)}`}
+                            placeholder="Item de avaliação..." />
+                        </td>
+                        {/* Fase do item (PR, RC, RM, RO) */}
+                        <td className="p-3 text-center font-bold text-blue-700">
+                          <input value={it.fase} onChange={(e) => updateItem(it.id, 'fase', e.target.value)}
+                            className="w-full bg-transparent px-1 text-center" placeholder="--" />
+                        </td>
+                        {/* Grau do item (1-6 ou menção textual) */}
+                        <td className="p-3 text-center font-extrabold">
+                          <input value={it.grau} onChange={(e) => updateItem(it.id, 'grau', e.target.value)}
+                            className={`w-full bg-transparent px-1 uppercase text-center ${getGradeColorClass(it.grau)}`}
+                            placeholder="--" />
+                        </td>
+                        {/* Comentário/observação do item */}
+                        <td className="p-3">
+                          <textarea value={it.comentario} onChange={(e) => updateItem(it.id, 'comentario', e.target.value)}
+                            className="w-full bg-transparent border-slate-200 focus:border-blue-300 focus:bg-white text-slate-700 border px-2.5 py-1.5 rounded-lg resize-y min-h-[44px] text-xs leading-relaxed"
+                            placeholder="Adicionar dados..." />
+                        </td>
+                        {/* Botão para excluir o item */}
+                        <td className="p-3 text-center">
+                          <button onClick={() => removeItem(it.id)}
+                            className="p-2 hover:bg-red-50 hover:text-red-500 text-slate-300 rounded-lg">
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20"><button onClick={addNewItem} className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition"><Plus size={18} /> Inserir Linha Manual</button></div>
+
+                {/* Botão para inserir item manual na tabela */}
+                <div className="mt-5 flex justify-center border-t border-slate-100 pt-5 relative z-20">
+                  <button onClick={addNewItem}
+                    className="flex items-center gap-2 font-semibold text-blue-600 hover:text-blue-800 px-5 py-2.5 bg-blue-50/50 rounded-lg active:scale-95 transition">
+                    <Plus size={18} /> Inserir Linha Manual
+                  </button>
+                </div>
               </div>
             </div>
           </div>
